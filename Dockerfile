@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-FROM python:3.13-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /bin/
+FROM python:3.13-slim@sha256:b3575dcf816cdacc5292df77a6e3e59b8941631078373a045efa2ac1e9c5c3b2 AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -16,7 +16,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim@sha256:b3575dcf816cdacc5292df77a6e3e59b8941631078373a045efa2ac1e9c5c3b2 AS runtime
 RUN groupadd --system --gid 10001 rooms \
     && useradd --system --uid 10001 --gid rooms --no-create-home --shell /usr/sbin/nologin rooms \
     && mkdir /data \
