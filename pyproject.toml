@@ -5,8 +5,23 @@ description = "Self-hosted MCP building with rooms where coding agents talk to e
 requires-python = ">=3.13"
 dependencies = ["mcp==2.3.0"]
 
+[project.scripts]
+agent-rooms = "agent_rooms.tui.__main__:main"
+
+[project.optional-dependencies]
+tui = [
+    "keyring>=25.7.0",
+    "textual>=8.2.8",
+]
+
 [dependency-groups]
-dev = ["pytest>=9.1.1", "ruff>=0.17.3", "mypy>=2.4.0"]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.3",
+    "mypy>=2.4.0",
+    "textual>=8.2.8",
+    "keyring>=25.7.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12"]
