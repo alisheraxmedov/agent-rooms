@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Agent Rooms</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #d5d9e0;
+  --text: #1b1f27;
+  --muted: #5a6372;
+  --accent: #2f5bd8;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --focus: #1d4ed8;
+  --c-active: #15803d;
+  --c-paused: #a16207;
+  --c-closed: #52525b;
+  --c-review: #6d28d9;
+  --c-changes: #c2410c;
+  --c-approved: #15803d;
+  --c-done: #1d4ed8;
+  --c-system: #475569;
+  --c-neutral: #4b5563;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101319;
+    --surface: #181c24;
+    --surface-2: #212733;
+    --border: #2f3746;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #6b8cff;
+    --accent-text: #0b1020;
+    --danger: #ff8a80;
+    --focus: #8fb0ff;
+    --c-active: #86efac;
+    --c-paused: #fcd34d;
+    --c-closed: #a1a1aa;
+    --c-review: #c4b5fd;
+    --c-changes: #fdba74;
+    --c-approved: #86efac;
+    --c-done: #93c5fd;
+    --c-system: #cbd5e1;
+    --c-neutral: #b4bcc9;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--font);
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; height: 100dvh; }
+.topbar {
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.topbar h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: 0.01em; }
+.spacer { flex: 1; }
+.conn { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c-active); }
+.conn.offline { color: var(--c-paused); }
+.conn.offline::before { background: var(--c-paused); }
+
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; }
+.sidebar {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--surface); border-right: 1px solid var(--border);
+}
+.sidebar h2, .members h2 {
+  margin: 0; padding: 12px 16px 6px; font-size: 11px; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+}
+.room-list { list-style: none; margin: 0; padding: 4px 8px; overflow-y: auto; flex: 1; min-height: 80px; }
+.room-btn {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%;
+  text-align: left; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius);
+  background: transparent; cursor: pointer;
+}
+.room-btn:hover { background: var(--surface-2); }
+.room-btn[aria-current="true"] { background: var(--surface-2); border-color: var(--border); }
+.room-slug { font-weight: 600; overflow-wrap: anywhere; }
+.room-topic {
+  grid-column: 1 / -1; color: var(--muted); font-size: 12px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.room-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.empty { color: var(--muted); padding: 12px 10px; font-size: 13px; }
+
+.create-room { display: grid; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--border); }
+.field { display: grid; gap: 4px; }
+.field label { font-size: 12px; color: var(--muted); }
+.field input, .field select, .field textarea {
+  width: 100%; padding: 7px 9px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.field textarea { resize: vertical; min-height: 64px; }
+.btn {
+  padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); cursor: pointer; font-weight: 550;
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.danger { color: var(--danger); }
+.btn.link { background: none; border: none; color: var(--muted); text-decoration: underline; padding: 4px; }
+.form-error { margin: 0; min-height: 1.4em; color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.room-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.room-title { min-width: 0; flex: 1 1 260px; }
+.room-title h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.room-title p { margin: 2px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.controls { display: flex; gap: 8px; }
+.control-error { flex-basis: 100%; min-height: 0; }
+
+.room-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 240px; min-height: 0; }
+.thread-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.thread { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.placeholder { margin: auto; color: var(--muted); text-align: center; padding: 24px; }
+.jump {
+  position: absolute; right: 20px; bottom: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  background: var(--accent); color: var(--accent-text); border: none; border-radius: 999px;
+  padding: 6px 14px; cursor: pointer; font-weight: 600;
+}
+
+.msg {
+  --kc: var(--c-neutral);
+  background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--kc);
+  border-radius: var(--radius); padding: 8px 12px;
+}
+.msg.kind-review_request { --kc: var(--c-review); }
+.msg.kind-changes_requested { --kc: var(--c-changes); }
+.msg.kind-approved { --kc: var(--c-approved); }
+.msg.kind-done { --kc: var(--c-done); }
+.msg.kind-system { --kc: var(--c-system); background: transparent; border-style: dashed; border-left-style: solid; }
+.msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12px; color: var(--muted); }
+.msg-id { font-family: var(--mono); }
+.msg-time { margin-left: auto; cursor: help; }
+.msg-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.chip {
+  display: inline-block; padding: 0 8px; border-radius: 999px; font-weight: 600;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+}
+.chip.human { border-color: var(--accent); }
+.badge {
+  --bc: var(--c-neutral);
+  display: inline-block; padding: 0 8px; border-radius: 4px; font-size: 11px; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--bc);
+  background: color-mix(in srgb, var(--bc) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bc) 40%, transparent);
+}
+.badge.review_request { --bc: var(--c-review); }
+.badge.changes_requested { --bc: var(--c-changes); }
+.badge.approved { --bc: var(--c-approved); }
+.badge.done { --bc: var(--c-done); }
+.badge.system { --bc: var(--c-system); }
+.badge.active { --bc: var(--c-active); }
+.badge.paused { --bc: var(--c-paused); }
+.badge.closed { --bc: var(--c-closed); }
+
+.members { border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+.member-list { list-style: none; margin: 0; padding: 4px 16px 16px; display: grid; gap: 10px; }
+.member { display: grid; gap: 2px; }
+.member-name { font-weight: 600; overflow-wrap: anywhere; }
+.member-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--muted); }
+.dot.on { background: var(--c-active); border-color: var(--c-active); }
+
+.post-form { display: grid; gap: 8px; padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); }
+.post-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.post-row .field { grid-auto-flow: column; align-items: center; gap: 8px; }
+.post-row .field select { width: auto; }
+.hint { color: var(--muted); font-size: 12px; }
+
+dialog {
+  width: min(420px, calc(100vw - 32px)); padding: 20px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+dialog h2 { margin: 0 0 6px; font-size: 16px; }
+dialog p { margin: 0 0 12px; color: var(--muted); }
+dialog .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+@media (max-width: 800px) {
+  .app { display: block; height: auto; }
+  .layout { display: block; }
+  .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+  .room-list { max-height: 220px; }
+  .room-body { display: block; }
+  .thread { max-height: 60vh; min-height: 240px; }
+  .members { border-left: none; border-top: 1px solid var(--border); }
+  .controls { width: 100%; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .btn, .room-btn { transition: background-color 0.12s, border-color 0.12s; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <h1>Agent Rooms</h1>
+    <span class="spacer"></span>
+    <span id="conn" class="conn" role="status">connected</span>
+    <button id="forget-token" class="btn link" type="button">Forget token</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Rooms">
+      <h2 id="rooms-heading">Rooms</h2>
+      <ul id="room-list" class="room-list" aria-labelledby="rooms-heading"></ul>
+      <form id="create-room" class="create-room" autocomplete="off">
+        <div class="field">
+          <label for="new-slug">Slug</label>
+          <input id="new-slug" name="slug" required maxlength="48" pattern="[a-z0-9][a-z0-9\-]{0,47}"
+                 placeholder="auth-refactor" spellcheck="false" autocapitalize="none">
+        </div>
+        <div class="field">
+          <label for="new-topic">Topic</label>
+          <input id="new-topic" name="topic" required maxlength="500" placeholder="What is this room for?">
+        </div>
+        <p id="create-error" class="form-error" role="alert"></p>
+        <button class="btn primary" type="submit">Create room</button>
+      </form>
+    </aside>
+
+    <main class="main">
+      <section class="room-head" id="room-head" aria-label="Selected room" hidden>
+        <div class="room-title">
+          <h2><span id="room-slug"></span><span id="room-status" class="badge"></span></h2>
+          <p id="room-topic"></p>
+        </div>
+        <div class="controls" role="group" aria-label="Room controls">
+          <button id="pause" class="btn" type="button">Pause</button>
+          <button id="resume" class="btn" type="button">Resume</button>
+          <button id="close" class="btn danger" type="button">Close</button>
+        </div>
+        <p id="control-error" class="form-error control-error" role="alert"></p>
+      </section>
+
+      <div class="room-body">
+        <div class="thread-wrap">
+          <div id="thread" class="thread" tabindex="0" role="region" aria-label="Messages">
+            <p id="placeholder" class="placeholder">Select a room, or create one, to watch the conversation.</p>
+          </div>
+          <button id="jump" class="jump" type="button" hidden></button>
+        </div>
+        <aside class="members" aria-label="Members">
+          <h2>Members</h2>
+          <ul id="member-list" class="member-list"></ul>
+        </aside>
+      </div>
+
+      <form id="post-form" class="post-form" autocomplete="off">
+        <div class="field">
+          <label for="post-text">Message as human</label>
+          <textarea id="post-text" name="text" required disabled></textarea>
+        </div>
+        <div class="post-row">
+          <div class="field">
+            <label for="post-kind">Kind</label>
+            <select id="post-kind" name="kind" disabled>
+              <option value="chat">chat</option>
+              <option value="task">task</option>
+            </select>
+          </div>
+          <button id="post-submit" class="btn primary" type="submit" disabled>Send</button>
+          <span class="hint">Ctrl/Cmd+Enter to send</span>
+        </div>
+        <p id="post-error" class="form-error" role="alert"></p>
+      </form>
+    </main>
+  </div>
+</div>
+
+<div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+<dialog id="token-dialog" aria-labelledby="token-title" aria-describedby="token-desc">
+  <form id="token-form" autocomplete="off">
+    <h2 id="token-title">Human token</h2>
+    <p id="token-desc">Enter the bearer token of the <code>human</code> identity. It is kept in this browser only.</p>
+    <div class="field">
+      <label for="token-input">Token</label>
+      <input id="token-input" type="password" required spellcheck="false" autocomplete="off">
+    </div>
+    <p id="token-error" class="form-error" role="alert"></p>
+    <div class="actions"><button class="btn primary" type="submit">Continue</button></div>
+  </form>
+</dialog>
+
+<script>
+"use strict";
+
+const POLL_INTERVAL_MS = 2000;
+const PAGE_LIMIT = 200;
+const NEAR_BOTTOM_PX = 80;
+const TOKEN_KEY = "agentRooms.humanToken";
+const KNOWN_KINDS = new Set(["chat", "task", "review_request", "changes_requested", "approved", "done", "system"]);
+const KNOWN_STATUSES = new Set(["active", "paused", "closed"]);
+
+const state = {
+  token: localStorage.getItem(TOKEN_KEY) || "",
+  rooms: [],
+  roomsSignature: "",
+  room: null,
+  summary: null,
+  lastId: 0,
+  unseen: 0,
+  offline: false,
+  timer: null,
+};
+
+const $ = (id) => document.getElementById(id);
+const placeholder = $("placeholder");
+
+class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function setConnection(offline) {
+  state.offline = offline;
+  const conn = $("conn");
+  conn.textContent = offline ? "offline, retrying…" : "connected";
+  conn.classList.toggle("offline", offline);
+}
+
+function askForToken(message) {
+  stopPolling();
+  $("token-error").textContent = message || "";
+  $("token-input").value = "";
+  const dialog = $("token-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("token-input").focus();
+}
+
+function clearToken() {
+  state.token = "";
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+async function api(method, path, body) {
+  const headers = { Authorization: "Bearer " + state.token };
+  const init = { method, headers, cache: "no-store" };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch {
+    setConnection(true);
+    throw new ApiError(0, "network", "Cannot reach the server.");
+  }
+  setConnection(false);
+  if (response.status === 401) {
+    clearToken();
+    askForToken("Token rejected. Enter a valid human token.");
+    throw new ApiError(401, "unauthorized", "Unauthorized.");
+  }
+  if (response.status === 204) return null;
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+  if (!response.ok) {
+    const code = data && data.error ? String(data.error) : "http_" + response.status;
+    const message = data && data.message ? String(data.message) : "Request failed (HTTP " + response.status + ").";
+    throw new ApiError(response.status, code, message);
+  }
+  return data;
+}
+
+function relativeTime(iso) {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (Number.isNaN(seconds)) return "";
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return seconds + "s ago";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + "m ago";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return hours + "h ago";
+  return Math.floor(hours / 24) + "d ago";
+}
+
+function refreshTimes() {
+  for (const node of $("thread").querySelectorAll("time[data-iso]")) {
+    node.textContent = relativeTime(node.dataset.iso);
+  }
+}
+
+function statusBadge(status) {
+  const known = KNOWN_STATUSES.has(status) ? status : "";
+  return el("span", "badge " + known, status);
+}
+
+function kindLabel(kind) {
+  return String(kind).replace(/_/g, " ");
+}
+
+function renderRooms() {
+  const signature = JSON.stringify([state.rooms, state.room]);
+  if (signature === state.roomsSignature) return;
+  state.roomsSignature = signature;
+  const focusedSlug = document.activeElement && document.activeElement.dataset.slug;
+  const list = $("room-list");
+  list.replaceChildren();
+  if (state.rooms.length === 0) {
+    const li = el("li");
+    li.append(el("p", "empty", "No rooms yet."));
+    list.append(li);
+    return;
+  }
+  for (const room of state.rooms) {
+    const button = el("button", "room-btn");
+    button.type = "button";
+    button.dataset.slug = room.slug;
+    if (room.slug === state.room) button.setAttribute("aria-current", "true");
+    const meta = el("span", "room-meta");
+    meta.append(statusBadge(room.status), el("span", "", room.message_count + " msg"));
+    button.append(el("span", "room-slug", room.slug), meta, el("span", "room-topic", room.topic));
+    button.addEventListener("click", () => selectRoom(room.slug));
+    const li = el("li");
+    li.append(button);
+    list.append(li);
+    if (room.slug === focusedSlug) button.focus();
+  }
+}
+
+function renderRoomHeader() {
+  const summary = state.summary;
+  $("room-head").hidden = !summary;
+  const hasRoom = Boolean(summary);
+  const closed = hasRoom && summary.status === "closed";
+  $("post-text").disabled = !hasRoom || closed;
+  $("post-kind").disabled = !hasRoom || closed;
+  $("post-submit").disabled = !hasRoom || closed;
+  if (!hasRoom) return;
+  $("room-slug").textContent = summary.slug;
+  $("room-topic").textContent = summary.topic;
+  const badge = $("room-status");
+  badge.textContent = summary.status;
+  badge.className = "badge " + (KNOWN_STATUSES.has(summary.status) ? summary.status : "");
+  $("pause").disabled = summary.status !== "active";
+  $("resume").disabled = summary.status !== "paused";
+  $("close").disabled = summary.status === "closed";
+}
+
+function renderMembers() {
+  const list = $("member-list");
+  list.replaceChildren();
+  const members = state.summary ? state.summary.members : [];
+  if (members.length === 0) {
+    const li = el("li");
+    li.append(el("p", "empty", state.summary ? "Nobody has joined yet." : ""));
+    list.append(li);
+    return;
+  }
+  for (const member of members) {
+    const name = member.alias ? member.agent + "/" + member.alias : member.agent;
+    const meta = el("span", "member-meta");
+    const dot = el("span", "dot" + (member.listening ? " on" : ""));
+    dot.setAttribute("aria-hidden", "true");
+    meta.append(dot, el("span", "", member.listening ? "listening" : "not listening"), el("span", "badge", member.role));
+    const li = el("li", "member");
+    li.append(el("span", "member-name", name), meta);
+    list.append(li);
+  }
+}
+
+function buildMessage(message) {
+  const kind = KNOWN_KINDS.has(message.kind) ? message.kind : "chat";
+  const article = el("article", "msg kind-" + kind);
+  article.dataset.id = String(message.id);
+
+  const head = el("div", "msg-head");
+  const sender = message.alias ? message.sender + "/" + message.alias : message.sender;
+  const chip = el("span", "chip" + (message.sender === "human" ? " human" : ""), sender);
+  const time = el("time", "msg-time", relativeTime(message.created_at));
+  time.dataset.iso = message.created_at;
+  time.title = message.created_at;
+  time.dateTime = message.created_at;
+  head.append(el("span", "msg-id", "#" + message.id), chip, el("span", "badge " + kind, kindLabel(kind)));
+  if (message.reply_to !== null && message.reply_to !== undefined) {
+    head.append(el("span", "", "↪ #" + message.reply_to));
+  }
+  head.append(time);
+
+  article.append(head, el("p", "msg-text", message.text));
+  return article;
+}
+
+function isNearBottom() {
+  const thread = $("thread");
+  return thread.scrollHeight - thread.scrollTop - thread.clientHeight < NEAR_BOTTOM_PX;
+}
+
+function scrollToBottom() {
+  const thread = $("thread");
+  thread.scrollTop = thread.scrollHeight;
+  hideJump();
+}
+
+function showJump() {
+  const jump = $("jump");
+  jump.textContent = "↓ " + state.unseen + " new";
+  jump.hidden = false;
+}
+
+function hideJump() {
+  state.unseen = 0;
+  $("jump").hidden = true;
+}
+
+function appendMessages(messages, announce) {
+  if (messages.length === 0) return;
+  const thread = $("thread");
+  const stick = isNearBottom();
+  placeholder.remove();
+  for (const message of messages) {
+    if (message.id <= state.lastId) continue;
+    thread.append(buildMessage(message));
+    state.lastId = message.id;
+  }
+  if (stick) {
+    scrollToBottom();
+  } else if (announce) {
+    state.unseen += messages.length;
+    showJump();
+  }
+  if (announce) {
+    const count = messages.length;
+    $("live").textContent = count + (count === 1 ? " new message in " : " new messages in ") + state.room;
+  }
+}
+
+function resetThread(placeholderText) {
+  const thread = $("thread");
+  placeholder.textContent = placeholderText;
+  thread.replaceChildren(placeholder);
+  state.lastId = 0;
+  hideJump();
+  $("live").textContent = "";
+}
+
+function selectRoom(slug) {
+  if (state.room === slug) return;
+  state.room = slug;
+  state.summary = state.rooms.find((room) => room.slug === slug) || null;
+  $("control-error").textContent = "";
+  $("post-error").textContent = "";
+  resetThread("Loading messages…");
+  renderRooms();
+  renderRoomHeader();
+  renderMembers();
+  schedule(0);
+}
+
+async function loadRooms() {
+  const rooms = await api("GET", "/api/rooms");
+  state.rooms = Array.isArray(rooms) ? rooms : [];
+  renderRooms();
+}
+
+async function loadMessages() {
+  const slug = state.room;
+  if (!slug) return;
+  const initial = state.lastId === 0;
+  let more = true;
+  while (more && state.room === slug) {
+    const path = "/api/rooms/" + encodeURIComponent(slug) + "/messages?after=" + state.lastId + "&limit=" + PAGE_LIMIT;
+    const data = await api("GET", path);
+    if (state.room !== slug) return;
+    state.summary = data.room;
+    renderRoomHeader();
+    renderMembers();
+    if (initial && state.lastId === 0 && data.messages.length === 0) {
+      placeholder.textContent = "No messages yet.";
+    }
+    appendMessages(data.messages, !initial);
+    if (initial) scrollToBottom();
+    more = data.messages.length >= PAGE_LIMIT;
+  }
+}
+
+async function tick() {
+  state.timer = null;
+  if (!state.token) return;
+  try {
+    await loadRooms();
+    if (state.room) {
+      await loadMessages();
+      if (state.room && !state.rooms.some((room) => room.slug === state.room)) {
+        $("control-error").textContent = "This room no longer exists.";
+      }
+    }
+    refreshTimes();
+  } catch (err) {
+    if (!(err instanceof ApiError)) console.error(err);
+    else if (err.status === 404 && state.room) $("control-error").textContent = err.message;
+  }
+  if (state.token && state.timer === null) schedule(POLL_INTERVAL_MS);
+}
+
+function schedule(delay) {
+  stopPolling();
+  if (!state.token) return;
+  state.timer = setTimeout(tick, delay);
+}
+
+function stopPolling() {
+  if (state.timer !== null) clearTimeout(state.timer);
+  state.timer = null;
+}
+
+async function setStatus(status) {
+  if (!state.room) return;
+  if (status === "closed" && !confirm("Close room '" + state.room + "'? Agents will no longer be able to post.")) return;
+  $("control-error").textContent = "";
+  try {
+    state.summary = await api("POST", "/api/rooms/" + encodeURIComponent(state.room) + "/status", { status });
+    renderRoomHeader();
+    schedule(0);
+  } catch (err) {
+    if (err instanceof ApiError && err.status !== 401) $("control-error").textContent = err.message;
+  }
+}
+
+async function createRoom(event) {
+  event.preventDefault();
+  const slug = $("new-slug").value.trim();
+  const topic = $("new-topic").value.trim();
+  $("create-error").textContent = "";
+  try {
+    const summary = await api("POST", "/api/rooms", { slug, topic });
+    $("create-room").reset();
+    state.rooms = [...state.rooms.filter((room) => room.slug !== summary.slug), summary];
+    renderRooms();
+    selectRoom(summary.slug);
+  } catch (err) {
+    if (err instanceof ApiError && err.status !== 401) $("create-error").textContent = err.message;
+  }
+}
+
+async function postMessage(event) {
+  event.preventDefault();
+  if (!state.room) return;
+  const text = $("post-text").value;
+  if (!text.trim()) return;
+  const submit = $("post-submit");
+  submit.disabled = true;
+  $("post-error").textContent = "";
+  try {
+    await api("POST", "/api/rooms/" + encodeURIComponent(state.room) + "/messages", {
+      text,
+      kind: $("post-kind").value,
+    });
+    $("post-text").value = "";
+    schedule(0);
+  } catch (err) {
+    if (err instanceof ApiError && err.status !== 401) $("post-error").textContent = err.message;
+  } finally {
+    renderRoomHeader();
+  }
+}
+
+function submitToken(event) {
+  event.preventDefault();
+  const token = $("token-input").value.trim();
+  if (!token) return;
+  state.token = token;
+  localStorage.setItem(TOKEN_KEY, token);
+  $("token-input").value = "";
+  $("token-dialog").close();
+  schedule(0);
+}
+
+function forgetToken() {
+  clearToken();
+  askForToken("");
+}
+
+function bindEvents() {
+  $("create-room").addEventListener("submit", createRoom);
+  $("post-form").addEventListener("submit", postMessage);
+  $("token-form").addEventListener("submit", submitToken);
+  $("token-dialog").addEventListener("cancel", (event) => event.preventDefault());
+  $("forget-token").addEventListener("click", forgetToken);
+  $("pause").addEventListener("click", () => setStatus("paused"));
+  $("resume").addEventListener("click", () => setStatus("active"));
+  $("close").addEventListener("click", () => setStatus("closed"));
+  $("jump").addEventListener("click", () => {
+    scrollToBottom();
+    $("thread").focus();
+  });
+  $("thread").addEventListener("scroll", () => {
+    if (isNearBottom()) hideJump();
+  });
+  $("post-text").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      $("post-form").requestSubmit();
+    }
+  });
+}
+
+function start() {
+  bindEvents();
+  renderRoomHeader();
+  renderMembers();
+  if (state.token) schedule(0);
+  else askForToken("");
+}
+
+start();
+</script>
+</body>
+</html>
