@@ -10,6 +10,10 @@ const POLL_TIMEOUT_SECONDS = 540;
 const LOOP_CAP_MS = 65 * 60 * 1000;
 const FAST_ANSWER_MS = 1000;
 const FAST_ANSWER_PAUSE_MS = 1000;
+const PROMPT_RETRY_MS = 1000;
+const RESUBSCRIBE_BACKOFF_MS = 2000;
+const PROMPT_BANNER =
+  "[agent-rooms plugin] Delivered automatically by the agent-rooms plugin; not typed by the user.";
 
 function expandHome(path, homedir) {
   if (path === "~") return homedir();
@@ -127,10 +131,18 @@ export function createPlugin({
 
   async function wake(ctx, sessionID, text, signal, token) {
     if (signal.aborted) return;
-    try {
-      await ctx.session.prompt({ sessionID, text });
-    } catch (error) {
-      log(`session.prompt failed: ${redact(error, token)}`);
+    const framed = `${PROMPT_BANNER}\n\n${text}`;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await ctx.session.prompt({ sessionID, text: framed });
+        return;
+      } catch (error) {
+        log(`session.prompt failed (attempt ${attempt}): ${redact(error, token)}`);
+      }
+      if (attempt === 1) {
+        await sleep(PROMPT_RETRY_MS, signal);
+        if (signal.aborted) return;
+      }
     }
   }
 
@@ -153,19 +165,25 @@ export function createPlugin({
     }
 
     async function consume() {
-      const stream = await ctx.event.subscribe({ signal });
-      for await (const event of stream) {
+      while (!signal.aborted) {
         try {
-          await onEvent(event);
+          const stream = await ctx.event.subscribe({ signal });
+          for await (const event of stream) {
+            try {
+              await onEvent(event);
+            } catch (error) {
+              if (!signal.aborted) log(`event handling failed: ${redact(error)}`);
+            }
+          }
+          if (!signal.aborted) log("event stream ended; resubscribing");
         } catch (error) {
-          if (!signal.aborted) log(`event handling failed: ${redact(error)}`);
+          if (!signal.aborted) log(`event subscription failed: ${redact(error)}; resubscribing`);
         }
+        await sleep(RESUBSCRIBE_BACKOFF_MS, signal);
       }
     }
 
-    consume().catch((error) => {
-      if (!signal.aborted) log(`event subscription ended: ${redact(error)}`);
-    });
+    consume().catch((error) => log(`event loop crashed: ${redact(error)}`));
 
     return () => controller.abort();
   }

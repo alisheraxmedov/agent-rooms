@@ -19,6 +19,10 @@ python3 scripts/rooms_setup.py uninstall [--purge-tokens]
 python3 scripts/rooms_setup.py --dry-run <command> ... # print the plan, change nothing
 ```
 
+Hooks write one-line diagnostics to stderr on error paths (server unreachable, HTTP status, invalid JSON, missing or empty token file; never the token). They still exit 0 and print the same stdout as before.
+
+One live session per token per room: two Claude or Codex sessions with the same token and no `alias` share one membership and one listener. Give the second session its own `alias` (`ROOMS_ALIAS` or the hook's `--alias`).
+
 `install` and `enable-repo` are idempotent: a second run changes nothing and says so. `install` records its files in `<HOME>/.config/agent-rooms/installed.json`; `uninstall` removes exactly those files and leaves the tokens unless `--purge-tokens` is given. `install` never overwrites a file it did not create (it stops with an error instead).
 
 ## Tokens
@@ -164,7 +168,13 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
       "description": "Agent Rooms reviewer: reads and comments, never edits files",
       "mode": "primary",
       "permissions": [
-        { "action": "edit", "resource": "*", "effect": "deny" }
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "git diff *", "effect": "allow" },
+        { "action": "shell", "resource": "git log *", "effect": "allow" },
+        { "action": "shell", "resource": "git show *", "effect": "allow" },
+        { "action": "shell", "resource": "git status *", "effect": "allow" },
+        { "action": "shell", "resource": "git * --output*", "effect": "deny" }
       ]
     }
   },
@@ -174,7 +184,9 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
 
 - The script merges into an existing file and keeps every key it does not own. It adds `$schema` only when missing, keeps your own `experimental.location_idle_timeout` if you set one, and writes plain JSON (valid JSONC).
 - If the existing file contains comments or is not plain JSON, the script **refuses to edit it** and prints this snippet so you can add it by hand.
-- `rooms-reviewer` removes the file-editing tools. The `shell` tool is not restricted.
+- `rooms-reviewer` denies `edit` and denies `shell` except `git diff`, `git log`, `git show` and `git status` (with or without arguments; `git ... --output*` is denied because it writes files). OpenCode V2 evaluates the **last matching rule** ([permissions](https://opencode.ai/v2/docs/permissions)), so the broad deny comes first and the allow rules after it; a pattern ending in ` *` also matches the bare command. Agent rules are appended after the global ones, so the global `rooms_*` allow still applies to the reviewer. Compound commands are scanned per part and any `deny` wins, but the scanner is best effort: the allow-list is a guard rail, not a sandbox. Other agents (`build`, ...) keep OpenCode's default policy, where `shell` and `edit` are allowed.
+- **The plugin prefixes every prompt it injects** with `[agent-rooms plugin] Delivered automatically by the agent-rooms plugin; not typed by the user.` and a blank line, so the session can tell a delivered room wake-up from something the user typed. If `session.prompt` fails the plugin retries once after 1 s. If the event stream ends or throws while the plugin is still active, it resubscribes after a 2 s backoff.
+- The plugin delivers at most once: a wake-up that is consumed but cannot be injected (both attempts failed) is not redelivered. Call `read` to catch up, and use the web UI for the full thread.
 
 ## Antigravity `agy` (per repo)
 

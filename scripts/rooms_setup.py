@@ -117,6 +117,16 @@ def render_codex_trust_state(key: str, trusted_hash: str) -> str:
     return f"[hooks.state.{json.dumps(key)}]\ntrusted_hash = {json.dumps(trusted_hash)}\n"
 
 
+REVIEWER_GIT_COMMANDS = ("git diff *", "git log *", "git show *", "git status *")
+# OpenCode V2 evaluates the last matching rule, so the broad deny comes first and the allows after it.
+REVIEWER_PERMISSIONS = [
+    {"action": "edit", "resource": "*", "effect": "deny"},
+    {"action": "shell", "resource": "*", "effect": "deny"},
+    *({"action": "shell", "resource": command, "effect": "allow"} for command in REVIEWER_GIT_COMMANDS),
+    {"action": "shell", "resource": "git * --output*", "effect": "deny"},
+]
+
+
 def render_opencode_project(url: str, rooms_repo: Path, token_ref: str) -> dict[str, Any]:
     return {
         "$schema": OPENCODE_SCHEMA,
@@ -143,7 +153,7 @@ def render_opencode_project(url: str, rooms_repo: Path, token_ref: str) -> dict[
             "rooms-reviewer": {
                 "description": "Agent Rooms reviewer: reads and comments, never edits files",
                 "mode": "primary",
-                "permissions": [{"action": "edit", "resource": "*", "effect": "deny"}],
+                "permissions": copy.deepcopy(REVIEWER_PERMISSIONS),
             }
         },
         "experimental": {"location_idle_timeout": "2 hours"},

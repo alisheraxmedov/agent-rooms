@@ -121,6 +121,17 @@ def test_render_codex_profile_is_valid_toml_when_available():
     assert data["hooks"]["state"]["/h/.codex/rooms.config.toml:stop:0:0"]["trusted_hash"] == "sha256:abc"
 
 
+REVIEWER_PERMISSIONS = [
+    {"action": "edit", "resource": "*", "effect": "deny"},
+    {"action": "shell", "resource": "*", "effect": "deny"},
+    {"action": "shell", "resource": "git diff *", "effect": "allow"},
+    {"action": "shell", "resource": "git log *", "effect": "allow"},
+    {"action": "shell", "resource": "git show *", "effect": "allow"},
+    {"action": "shell", "resource": "git status *", "effect": "allow"},
+    {"action": "shell", "resource": "git * --output*", "effect": "deny"},
+]
+
+
 def test_render_opencode_project_exact_payload():
     ref = "~/.config/agent-rooms/opencode.token"
     assert rs.render_opencode_project(URL, ROOMS, ref) == {
@@ -148,11 +159,52 @@ def test_render_opencode_project_exact_payload():
             "rooms-reviewer": {
                 "description": "Agent Rooms reviewer: reads and comments, never edits files",
                 "mode": "primary",
-                "permissions": [{"action": "edit", "resource": "*", "effect": "deny"}],
+                "permissions": REVIEWER_PERMISSIONS,
             }
         },
         "experimental": {"location_idle_timeout": "2 hours"},
     }
+
+
+def wildcard(pattern: str, value: str) -> bool:
+    """OpenCode V2 whole-value wildcards; a trailing ' *' also matches the bare command."""
+
+    def matches(text: str) -> bool:
+        regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in text)
+        return re.fullmatch(regex, value) is not None
+
+    return matches(pattern) or (pattern.endswith(" *") and matches(pattern[:-2]))
+
+
+def evaluate(rules, action, resource):
+    """OpenCode V2: the last matching rule wins; no match means ask."""
+    effect = "ask"
+    for rule in rules:
+        if wildcard(rule["action"], action) and wildcard(rule["resource"], resource):
+            effect = rule["effect"]
+    return effect
+
+
+@pytest.mark.parametrize(
+    ("action", "resource", "effect"),
+    [
+        ("edit", "src/app.py", "deny"),
+        ("shell", "sed -i s/a/b/ f", "deny"),
+        ("shell", "rm -rf x", "deny"),
+        ("shell", "git push origin main", "deny"),
+        ("shell", "git diff", "allow"),
+        ("shell", "git diff --stat HEAD~1", "allow"),
+        ("shell", "git log --oneline -5", "allow"),
+        ("shell", "git show HEAD", "allow"),
+        ("shell", "git status --short", "allow"),
+        ("shell", "git diff --output=/tmp/x", "deny"),
+        ("shell", "git log --output=notes", "deny"),
+        ("shell", "git difftool", "deny"),
+    ],
+)
+def test_rooms_reviewer_permissions_allow_only_read_only_git(action, resource, effect):
+    rules = rs.render_opencode_project(URL, ROOMS, "~/t")["agents"]["rooms-reviewer"]["permissions"]
+    assert evaluate(rules, action, resource) == effect
 
 
 def test_render_agy_mcp_exact_payload():

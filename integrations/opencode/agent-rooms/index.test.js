@@ -6,6 +6,9 @@ import defaultPlugin, { createPlugin } from "./index.js";
 const DIR = "/work/repo";
 const TOKEN = "tok-secret-123";
 const SUCCEEDED = "session.execution.succeeded";
+const BANNER =
+  "[agent-rooms plugin] Delivered automatically by the agent-rooms plugin; not typed by the user.";
+const framed = (prompt) => `${BANNER}\n\n${prompt}`;
 
 function succeeded(sessionID) {
   return { type: SUCCEEDED, data: { sessionID } };
@@ -65,6 +68,7 @@ function makeEventStream(signal) {
   };
   signal?.addEventListener("abort", finish, { once: true });
   return {
+    end: finish,
     push(event) {
       const handled = new Promise((resolve) => consumed.push({ event, resolve }));
       items.push(event);
@@ -95,7 +99,14 @@ function makeEventStream(signal) {
   };
 }
 
-function makeCtx({ sessions = {}, options = {}, directory = DIR, getImpl, promptImpl } = {}) {
+function makeCtx({
+  sessions = {},
+  options = {},
+  directory = DIR,
+  getImpl,
+  promptImpl,
+  subscribeImpl,
+} = {}) {
   const subscriptions = [];
   const stream = { current: null };
   const ctx = {
@@ -104,6 +115,7 @@ function makeCtx({ sessions = {}, options = {}, directory = DIR, getImpl, prompt
     event: {
       subscribe(args) {
         subscriptions.push(args);
+        if (subscribeImpl) subscribeImpl(subscriptions.length);
         stream.current = makeEventStream(args?.signal);
         return stream.current.iterable;
       },
@@ -125,7 +137,12 @@ function makeCtx({ sessions = {}, options = {}, directory = DIR, getImpl, prompt
       },
     },
   };
-  return { ctx, subscriptions, push: (event) => stream.current.push(event) };
+  return {
+    ctx,
+    subscriptions,
+    push: (event) => stream.current.push(event),
+    endStream: () => stream.current.end(),
+  };
 }
 
 function build({
@@ -139,6 +156,7 @@ function build({
   sessions = { ses_a: { location: { directory: DIR } } },
   getImpl,
   promptImpl,
+  subscribeImpl,
   options = { url: "http://rooms.test:9999", tokenFile: "/tokens/opencode.token" },
 } = {}) {
   const fetch = makeFetch(script);
@@ -158,7 +176,13 @@ function build({
     sleep: sleep ?? (async () => {}),
     log: (message) => logs.push(message),
   });
-  const harness = makeCtx({ sessions, options: ctxOptions ?? options, getImpl, promptImpl });
+  const harness = makeCtx({
+    sessions,
+    options: ctxOptions ?? options,
+    getImpl,
+    promptImpl,
+    subscribeImpl,
+  });
   const cleanup = plugin.setup(harness.ctx);
   return { ...harness, plugin, fetch, logs, readCalls, cleanup };
 }
@@ -211,7 +235,9 @@ test("200 prompts the same session once with the server prompt and ends the loop
   await waitFor(() => h.ctx.session.promptCalls.length === 1, "prompt");
   await settle();
 
-  assert.deepEqual(h.ctx.session.promptCalls, [{ sessionID: "ses_a", text: "hello from room" }]);
+  assert.deepEqual(h.ctx.session.promptCalls, [
+    { sessionID: "ses_a", text: framed("hello from room") },
+  ]);
   assert.equal(h.fetch.calls.length, 1);
   h.cleanup();
 });
@@ -222,7 +248,7 @@ test("204 timeout polls again", async () => {
   await waitFor(() => h.ctx.session.promptCalls.length === 1, "prompt after refetch");
 
   assert.equal(h.fetch.calls.length, 2);
-  assert.equal(h.ctx.session.promptCalls[0].text, "second poll");
+  assert.equal(h.ctx.session.promptCalls[0].text, framed("second poll"));
   h.cleanup();
 });
 
@@ -378,12 +404,136 @@ test("session.prompt rejecting does not throw and releases the session", async (
     },
   });
   await h.push(succeeded("ses_a"));
-  await waitFor(() => h.ctx.session.promptCalls.length === 1, "first prompt");
+  await waitFor(() => h.ctx.session.promptCalls.length === 2, "first prompt and its retry");
   await settle();
 
   await h.push(succeeded("ses_a"));
-  await waitFor(() => h.ctx.session.promptCalls.length === 2, "second prompt");
+  await waitFor(() => h.ctx.session.promptCalls.length === 4, "second prompt and its retry");
   h.cleanup();
+});
+
+test("every injected prompt starts with the plugin banner and a blank line", async () => {
+  const h = build({ script: [wake("line one\nline two")] });
+  await h.push(succeeded("ses_a"));
+  await waitFor(() => h.ctx.session.promptCalls.length === 1, "prompt");
+
+  const { text } = h.ctx.session.promptCalls[0];
+  assert.ok(text.startsWith(`${BANNER}\n\n`));
+  assert.equal(text.slice(BANNER.length + 2), "line one\nline two");
+  h.cleanup();
+});
+
+test("a failed session.prompt is retried once after 1 s and the retry carries the same text", async () => {
+  const sleeps = [];
+  let attempt = 0;
+  const h = build({
+    script: [wake("retry me")],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    promptImpl: async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("busy");
+      return { id: "msg_2" };
+    },
+  });
+  await h.push(succeeded("ses_a"));
+  await waitFor(() => h.ctx.session.promptCalls.length === 2, "retry");
+  await settle();
+
+  assert.deepEqual(sleeps, [1000]);
+  assert.equal(h.ctx.session.promptCalls.length, 2);
+  assert.equal(h.ctx.session.promptCalls[1].text, h.ctx.session.promptCalls[0].text);
+  assert.equal(h.logs.filter((line) => line.includes("failed")).length, 1);
+  h.cleanup();
+});
+
+test("session.prompt is attempted at most twice per wake", async () => {
+  const h = build({
+    script: [wake("never lands")],
+    promptImpl: async () => {
+      throw new Error("gone");
+    },
+  });
+  await h.push(succeeded("ses_a"));
+  await waitFor(() => h.ctx.session.promptCalls.length === 2, "retry");
+  await settle();
+
+  assert.equal(h.ctx.session.promptCalls.length, 2);
+  assert.ok(h.logs.every((line) => line.startsWith("[agent-rooms]")));
+  h.cleanup();
+});
+
+test("cleanup during the prompt retry pause sends no second prompt", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const h = build({
+    script: [wake("paused")],
+    sleep: async () => gate,
+    promptImpl: async () => {
+      throw new Error("busy");
+    },
+  });
+  await h.push(succeeded("ses_a"));
+  await waitFor(() => h.ctx.session.promptCalls.length === 1, "first attempt");
+  h.cleanup();
+  release();
+  await settle();
+  assert.equal(h.ctx.session.promptCalls.length, 1);
+});
+
+test("an event stream that ends is resubscribed after a 2 s backoff", async () => {
+  const sleeps = [];
+  const h = build({
+    script: [idle()],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  await h.push(succeeded("ses_missing"));
+  assert.equal(h.subscriptions.length, 1);
+  h.endStream();
+  await waitFor(() => h.subscriptions.length === 2, "resubscription");
+
+  assert.deepEqual(sleeps, [2000]);
+  assert.ok(h.subscriptions[1].signal instanceof AbortSignal);
+  assert.ok(h.logs.some((line) => line.includes("resubscrib")));
+  await h.push(succeeded("ses_a"));
+  await waitFor(() => h.fetch.calls.length === 1, "events flow again");
+  h.cleanup();
+});
+
+test("a subscription that throws is retried with a 2 s backoff", async () => {
+  const sleeps = [];
+  const h = build({
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    subscribeImpl: (count) => {
+      if (count === 1) throw new Error("bus down");
+    },
+  });
+  await waitFor(() => h.subscriptions.length === 2, "second subscription");
+
+  assert.deepEqual(sleeps, [2000]);
+  h.cleanup();
+});
+
+test("cleanup stops resubscribing", async () => {
+  const h = build({ sleep: () => new Promise(() => {}) });
+  h.cleanup();
+  await settle();
+  assert.equal(h.subscriptions.length, 1);
+});
+
+test("an abort during the backoff does not resubscribe", async () => {
+  const h = build();
+  h.endStream();
+  h.cleanup();
+  await settle();
+  assert.equal(h.subscriptions.length, 1);
 });
 
 test("a second event for a session with a running loop starts no second loop", async () => {

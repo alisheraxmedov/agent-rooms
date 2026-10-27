@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -34,12 +35,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def diag(message: str, token: str = "") -> None:
+    """One line on stderr; never the token."""
+    with contextlib.suppress(Exception):
+        line = " ".join(message.split())
+        if token:
+            line = line.replace(token, "***")
+        print(f"[agent-rooms hook] {line}", file=sys.stderr, flush=True)
+
+
 def read_token(path: str) -> str:
     try:
         with open(os.path.expanduser(path), encoding="utf-8") as handle:
-            return handle.read().strip()
+            token = handle.read().strip()
     except (OSError, ValueError):
+        diag(f"cannot read token file {path}")
         return ""
+    if not token:
+        diag(f"token file {path} is empty")
+    return token
 
 
 def build_url(base: str, timeout: int, alias: str) -> str:
@@ -52,15 +66,27 @@ def build_url(base: str, timeout: int, alias: str) -> str:
 def fetch_next(base: str, token: str, alias: str, timeout: int) -> tuple[str, str]:
     """Return (MESSAGE, prompt), (TIMEOUT, "") or (STOP, "")."""
     headers = {"Authorization": "Bearer " + token}
-    with contextlib.suppress(Exception):  # the hook must never crash the agent
+    try:  # the hook must never crash the agent
         request = urllib.request.Request(build_url(base, timeout, alias), headers=headers)  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout + SOCKET_SLACK) as response:  # noqa: S310
             if response.status == 204 and response.headers.get("X-Listen-State") == "timeout":
                 return TIMEOUT, ""
             if response.status == 200:
-                prompt = json.loads(response.read().decode("utf-8")).get("prompt")
+                body = json.loads(response.read().decode("utf-8"))
+                prompt = body.get("prompt") if isinstance(body, dict) else None
                 if isinstance(prompt, str) and prompt:
                     return MESSAGE, prompt
+                diag("listen/next answered 200 without a prompt", token)
+            elif response.status != 204:
+                diag(f"listen/next answered HTTP {response.status}", token)
+    except urllib.error.HTTPError as error:
+        diag(f"listen/next answered HTTP {error.code}", token)
+    except urllib.error.URLError as error:
+        diag(f"server unreachable at {base}: {error.reason}", token)
+    except ValueError:
+        diag("listen/next returned invalid JSON", token)
+    except Exception as error:
+        diag(f"listen/next failed at {base}: {type(error).__name__}: {error}", token)
     return STOP, ""
 
 

@@ -223,3 +223,74 @@ def test_instant_timeouts_are_paced(stub, token_file):
     assert result.returncode == 0
     assert result.stdout == ""
     assert 2 <= len(stub.requests) <= 4
+
+
+def one_line(stderr: str) -> str:
+    lines = stderr.splitlines()
+    assert len(lines) == 1, stderr
+    assert lines[0].startswith("[agent-rooms hook] ")
+    assert TOKEN not in stderr
+    return lines[0]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ((500, {}, b"boom"), "HTTP 500"),
+        ((401, {"Content-Type": "application/json"}, b'{"error":"unauthorized"}'), "HTTP 401"),
+        ((200, {"Content-Type": "application/json"}, b"not json"), "invalid JSON"),
+        ((200, {"Content-Type": "application/json"}, b'{"no_prompt": 1}'), "without a prompt"),
+        ((200, {"Content-Type": "application/json"}, b"[1]"), "without a prompt"),
+        ((204, {}, b""), None),
+    ],
+)
+def test_server_errors_leave_one_diagnostic_line_and_keep_the_stdout_contract(
+    stub, token_file, response, expected
+):
+    stub.script = [response]
+    result = run_against(stub, token_file, "agy")
+    assert result.returncode == 0
+    assert result.stdout.strip() == '{"decision": "stop"}'
+    if expected is None:
+        assert result.stderr == ""
+    else:
+        assert expected in one_line(result.stderr)
+
+
+def test_unreachable_server_leaves_a_diagnostic_naming_the_url(token_file):
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    result = run_hook("--format", "claude", "--token-file", str(token_file), "--url", url)
+    assert result.returncode == 0
+    assert result.stdout == ""
+    line = one_line(result.stderr)
+    assert "unreachable" in line
+    assert url in line
+
+
+def test_missing_token_file_leaves_a_diagnostic_naming_the_file(stub, tmp_path):
+    missing = tmp_path / "absent.token"
+    result = run_against(stub, missing, "codex")
+    assert result.returncode == 0
+    assert result.stdout == ""
+    line = one_line(result.stderr)
+    assert str(missing) in line
+    assert "token" in line
+    assert stub.requests == []
+
+
+def test_empty_token_file_leaves_a_diagnostic(stub, tmp_path):
+    path = tmp_path / "token"
+    path.write_text("  \n")
+    result = run_against(stub, path, "claude")
+    assert result.returncode == 0
+    assert "empty" in one_line(result.stderr)
+
+
+def test_healthy_paths_write_nothing_to_stderr(stub, token_file):
+    stub.script = [TIMEOUT, ok_response()]
+    assert run_against(stub, token_file, "claude").stderr == ""
+    stub.script = [IDLE]
+    assert run_against(stub, token_file, "claude").stderr == ""
