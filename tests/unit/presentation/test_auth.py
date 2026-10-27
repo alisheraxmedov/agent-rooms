@@ -125,7 +125,9 @@ async def test_bearer_scheme_is_case_insensitive() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("path", ["/api/rooms", "/api/rooms/r1/messages", "/api/rooms/r1/status"])
+@pytest.mark.parametrize(
+    "path", ["/api/rooms", "/api/rooms/r1/messages", "/api/rooms/r1/status", "/api/rooms/r1/members/role"]
+)
 async def test_agent_is_forbidden_on_admin_rest(path: str) -> None:
     recorder = await call(path, token="claude-token-0123456789-abcdef")
     assert recorder.status == 403
@@ -198,6 +200,8 @@ NOT_FOUND = {"error": "not_found", "message": "No such endpoint."}
 @pytest.mark.parametrize(
     "path",
     ["/nope", "/docs", "/api", "/api/", "/api/rooms/", "/api/rooms/r1/unknown", "/api/rooms/a/b/c",
+     "/api/rooms/r1/members", "/api/rooms/r1/members/", "/api/rooms/r1/members/other",
+     "/api/rooms/r1/members/role/x", "/api/rooms//members/role", "/api/rooms/members/role",
      "/api/listen", "/api/listen/", "/api/listen/other", "/mcp/", "/mcp/x", "//api/rooms", "/API/rooms",
      "/healthz/", "//"],
 )  # fmt: skip
@@ -227,6 +231,7 @@ async def test_paths_outside_the_allow_list_are_401_without_a_token(path: str) -
         ("GET", "/api/rooms/r1/messages"),
         ("POST", "/api/rooms/r1/messages"),
         ("POST", "/api/rooms/r1/status"),
+        ("POST", "/api/rooms/r1/members/role"),
         ("DELETE", "/api/rooms/r1"),
     ],
 )

@@ -48,8 +48,8 @@ Resuming a room resets both counters. The caps are `ROOMS_DEFAULT_MAX_MESSAGES` 
 - Delivery is at most once. If a wake is consumed by a hook that gets killed, it is not redelivered; the agent calls `read` to catch up. The UI always shows the full thread.
 - The sender is taken from the token, never from a tool argument.
 - One live session per token per room. Two Claude sessions with the same token and no `alias` share one membership and one listener. Give the second session an `alias` (`ROOMS_ALIAS` for hooks and the plugin, or `alias` in the tool calls).
-- One agent cannot be writer and reviewer in the same room. `observer` combines with anything.
-- Allowed message kinds: writer `chat`, `task`, `review_request`, `done`; reviewer `chat`, `task`, `changes_requested`, `approved`; observer `chat`; human `chat`, `task`.
+- One agent cannot be writer and reviewer in the same room. `observer` combines with anything. A room has at most one `lead`; only the human assigns or changes roles after joining (member role selector in the web UI, or `POST /api/rooms/{room}/members/role` with `{"agent", "alias": "", "role"}`). Assigning `lead` demotes the current lead to `observer`.
+- Allowed message kinds: writer `chat`, `task`, `review_request`, `done`; reviewer `chat`, `task`, `changes_requested`, `approved`; observer `chat`; lead `chat`, `task`, `done`; human `chat`, `task`.
 
 ## Isolation guarantee
 
@@ -180,6 +180,35 @@ End-to-end evidence: [OpenCode as reviewer](docs/evidence/e2e-opencode.md), [Cod
 
 A room also pauses by itself at a loop guard and posts a system message saying why.
 
+### Terminal client
+
+`agent-rooms` is a keyboard-only terminal UI with the same features as the web UI. It runs on the host and talks to the REST API only; the server and the Docker image are unchanged (the image does not install Textual).
+
+Install from the repo (needs `uv`; the `tui` extra adds Textual and keyring):
+
+```sh
+uv tool install --editable '.[tui]'     # puts agent-rooms in ~/.local/bin
+agent-rooms                              # or: agent-rooms --url http://127.0.0.1:8765
+```
+
+Layout: rooms on the left (status marker and message count), the thread of the selected room in the middle (header with slug, status and topic), members on the right (role and a listening dot), one input line at the bottom. It polls every 2 s and only follows new messages while you are at the bottom of the thread; PgUp/PgDn scroll. Room text is drawn as plain text, so markup in a message is shown literally.
+
+Type text and press Enter to post a `chat` message. `↑`/`↓` recall earlier input, `Tab` completes commands and room slugs, `Esc` cancels a prompt. Start a message with `//` to send a leading slash.
+
+| Command | Effect |
+|---|---|
+| `/login` | Masked token prompt; the token is checked against the server, then saved |
+| `/logout` | Delete the saved token |
+| `/room <slug>` | Switch room |
+| `/new <slug> <topic…>` | Create a room and switch to it |
+| `/task <text>` | Post a message of kind `task` |
+| `/pause`, `/resume`, `/close` | Change the status of the selected room |
+| `/delete [slug]` | Delete a closed room; you confirm by typing its slug |
+| `/help` | List commands and keys |
+| `/quit` | Exit (`Ctrl+C` also exits) |
+
+Token: `ROOMS_HUMAN_TOKEN` wins if set; otherwise the OS keyring (service `agent-rooms`, account `human`), where `/login` saves it. The client never prints, logs or writes the token to a file, and never puts it on a command line. Processes running as you can read the keyring entry, the same residual risk as the web UI keeping the token in `localStorage` (see Security model). Use the human token that `tokens` printed (see Quick start).
+
 ## Configuration
 
 Environment variables, read by `src/agent_rooms/settings.py`. To change one in Docker, add it under `environment:` in `docker-compose.yml`.
@@ -297,6 +326,7 @@ Dependency rule, enforced by `tests/unit/test_architecture.py`: `domain` imports
 | Stop hook | `hooks/room_hook.py`; agy auto-approve: `hooks/agy_approve_rooms.py` |
 | OpenCode plugin | `integrations/opencode/agent-rooms/index.js` |
 | Client setup | `scripts/rooms_setup.py` |
+| Terminal client | `src/agent_rooms/tui/` (REST client only; imports nothing from the server layers, and nothing imports it) |
 | Tests | `tests/{unit,integration,hooks,scripts}`, `tests/test_dockerfile.py`, `tests/test_packaging.py` |
 
 ### Documents

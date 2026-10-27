@@ -70,3 +70,14 @@ def test_protocol_reviewer_verifies_and_discloses_unrun_tests(protocol: str, req
 )
 def test_protocol_hints_read_only_reviewers_on_shell_use(protocol: str, required: str) -> None:
     assert required in protocol
+
+
+def test_protocol_lists_lead_in_the_role_table(protocol: str) -> None:
+    assert "| lead | `chat`, `task`, `done` |" in protocol
+
+
+def test_protocol_says_only_the_human_changes_roles(protocol: str) -> None:
+    assert (
+        "Roles are set when you join; afterwards only the human can change them. A system message "
+        "announces changes; always act according to your current role (shown in every wake prompt)."
+    ) in protocol

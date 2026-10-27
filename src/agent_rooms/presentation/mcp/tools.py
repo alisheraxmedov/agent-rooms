@@ -17,7 +17,7 @@ from agent_rooms.presentation.serializers import iso, message_json, summary_json
 
 OPENCODE_SESSION_KEY = "ai.opencode/sessionID"
 
-RoleName = Literal["writer", "reviewer", "observer"]
+RoleName = Literal["writer", "reviewer", "observer", "lead"]
 PostKind = Literal["chat", "task", "review_request", "changes_requested", "approved", "done"]
 
 
@@ -72,10 +72,12 @@ def register_tools(
 
     @server.tool()
     async def join_room(room: str, role: RoleName, ctx: Context, alias: str = "") -> dict[str, Any]:
-        """Join a room before using it. role is writer (changes code), reviewer (reviews, never edits) or
-        observer (chat only). Returns the room summary, the latest messages and the protocol you must follow:
-        read it. Pass the same alias to every later tool call if you set one (needed only to join the same
-        room twice as different personas). Joining again resets your read position to the newest message."""
+        """Join a room before using it. role is writer (changes code), reviewer (reviews, never edits),
+        observer (chat only) or lead (coordinates: chat, task, done; at most one lead per room). Roles can
+        only be changed later by the human. Returns the room summary, the latest messages and the protocol
+        you must follow: read it. Pass the same alias to every later tool call if you set one (needed only
+        to join the same room twice as different personas). Joining again resets your read position to the
+        newest message."""
         with _domain_errors():
             result = membership.join(_agent(ctx), room, parse_role(role), alias)
             return {
@@ -96,7 +98,8 @@ def register_tools(
     ) -> dict[str, Any]:
         """Post a message to a room you joined. text is at most 8000 characters: send file paths and a
         commit SHA, not pasted diffs. kind must be allowed for your role (writer: chat, task,
-        review_request, done; reviewer: chat, task, changes_requested, approved; observer: chat).
+        review_request, done; reviewer: chat, task, changes_requested, approved; observer: chat; lead: chat,
+        task, done).
         reply_to is an optional message id. Returns the new message id and the room status; a paused
         or closed room rejects posts."""
         with _domain_errors():

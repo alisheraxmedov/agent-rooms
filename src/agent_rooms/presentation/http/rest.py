@@ -12,7 +12,7 @@ from agent_rooms.application.services.listening import Listening
 from agent_rooms.application.services.messaging import Messaging
 from agent_rooms.application.services.rooms import RoomAdmin
 from agent_rooms.domain.errors import InvalidInput
-from agent_rooms.domain.models import parse_kind, parse_status, validate_alias
+from agent_rooms.domain.models import parse_kind, parse_role, parse_status, validate_alias
 from agent_rooms.presentation.http.csp import content_security_policy
 from agent_rooms.presentation.http.errors import Endpoint, HttpError, api_errors
 from agent_rooms.presentation.identity import agent_of
@@ -140,6 +140,17 @@ def build_routes(
         return JSONResponse(summary_json(summary))
 
     @api_errors
+    async def set_member_role(request: Request) -> Response:
+        body = await _json_object(request)
+        summary = rooms.set_member_role(
+            request.path_params["room"],
+            _string(body, "agent"),
+            validate_alias(_string(body, "alias", "")),
+            parse_role(_string(body, "role")),
+        )
+        return JSONResponse(summary_json(summary))
+
+    @api_errors
     async def delete_room(request: Request) -> Response:
         rooms.delete_room(request.path_params["room"])
         return Response(status_code=204)
@@ -167,5 +178,6 @@ def build_routes(
         RouteSpec("/api/rooms/{room}/messages", ("GET",), room_messages),
         RouteSpec("/api/rooms/{room}/messages", ("POST",), post_message),
         RouteSpec("/api/rooms/{room}/status", ("POST",), set_status),
+        RouteSpec("/api/rooms/{room}/members/role", ("POST",), set_member_role),
         RouteSpec("/api/listen/next", ("GET",), listen_next),
     ]

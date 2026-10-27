@@ -24,7 +24,7 @@ class Audience(Enum):
 
 _PUBLIC_PATHS = frozenset({"/", "/healthz"})
 _AGENT_PATHS = frozenset({"/api/listen/next", "/mcp"})
-_ROOM_SUBPATHS = frozenset({"messages", "status"})
+_ROOM_RESOURCES = frozenset({("messages",), ("status",), ("members", "role")})
 
 
 def audience_of(path: str) -> Audience | None:
@@ -36,8 +36,10 @@ def audience_of(path: str) -> Audience | None:
     if path == "/api/rooms":
         return Audience.HUMAN
     parts = path.split("/")
-    is_room_path = parts[:3] == ["", "api", "rooms"] and all(parts[3:])
-    if is_room_path and (len(parts) == 4 or (len(parts) == 5 and parts[4] in _ROOM_SUBPATHS)):
+    if parts[:3] != ["", "api", "rooms"] or not all(parts[3:]):
+        return None
+    room_resource = tuple(parts[4:])
+    if len(parts) == 4 or room_resource in _ROOM_RESOURCES:
         return Audience.HUMAN
     return None
 

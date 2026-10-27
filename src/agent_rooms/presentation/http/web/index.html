@@ -188,7 +188,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .member-list { list-style: none; margin: 0; padding: 4px 16px 16px; display: grid; gap: 10px; }
 .member { display: grid; gap: 2px; }
 .member-name { font-weight: 600; overflow-wrap: anywhere; }
-.member-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.member-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--muted); }
+.role-select {
+  padding: 1px 4px; font-size: 12px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.role-select:disabled { opacity: 0.45; }
+.member-error { padding: 0 16px 12px; min-height: 0; font-size: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--muted); }
 .dot.on { background: var(--c-active); border-color: var(--c-active); }
 
@@ -275,6 +281,7 @@ dialog .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
         <aside class="members" aria-label="Members">
           <h2>Members</h2>
           <ul id="member-list" class="member-list"></ul>
+          <p id="member-error" class="form-error member-error" role="alert"></p>
         </aside>
       </div>
 
@@ -325,6 +332,7 @@ const NEAR_BOTTOM_PX = 80;
 const TOKEN_KEY = "agentRooms.humanToken";
 const KNOWN_KINDS = new Set(["chat", "task", "review_request", "changes_requested", "approved", "done", "system"]);
 const KNOWN_STATUSES = new Set(["active", "paused", "closed"]);
+const ROLES = ["writer", "reviewer", "observer", "lead"];
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || "",
@@ -332,6 +340,7 @@ const state = {
   roomsSignature: "",
   room: null,
   summary: null,
+  membersSignature: "",
   lastId: 0,
   unseen: 0,
   offline: false,
@@ -488,10 +497,16 @@ function renderRoomHeader() {
   $("delete").hidden = summary.status !== "closed";
 }
 
-function renderMembers() {
+function renderMembers(force = false) {
+  const members = state.summary ? state.summary.members : [];
+  const signature = JSON.stringify([state.room, Boolean(state.summary), members]);
+  if (signature === state.membersSignature) return;
+  const focused = document.activeElement;
+  // An open role menu must survive the 2 s poll; the next poll after it loses focus redraws the panel.
+  if (!force && focused && focused.classList.contains("role-select") && $("member-list").contains(focused)) return;
+  state.membersSignature = signature;
   const list = $("member-list");
   list.replaceChildren();
-  const members = state.summary ? state.summary.members : [];
   if (members.length === 0) {
     const li = el("li");
     li.append(el("p", "empty", state.summary ? "Nobody has joined yet." : ""));
@@ -499,15 +514,28 @@ function renderMembers() {
     return;
   }
   for (const member of members) {
-    const name = member.alias ? member.agent + "/" + member.alias : member.agent;
+    const name = memberName(member);
     const meta = el("span", "member-meta");
     const dot = el("span", "dot" + (member.listening ? " on" : ""));
     dot.setAttribute("aria-hidden", "true");
-    meta.append(dot, el("span", "", member.listening ? "listening" : "not listening"), el("span", "badge", member.role));
+    const select = el("select", "role-select");
+    select.setAttribute("aria-label", "Role of " + name);
+    for (const role of ROLES.includes(member.role) ? ROLES : [...ROLES, member.role]) {
+      const option = el("option", "", role);
+      option.value = role;
+      select.append(option);
+    }
+    select.value = member.role;
+    select.addEventListener("change", () => changeRole(member, select));
+    meta.append(dot, el("span", "", member.listening ? "listening" : "not listening"), select);
     const li = el("li", "member");
     li.append(el("span", "member-name", name), meta);
     list.append(li);
   }
+}
+
+function memberName(member) {
+  return member.alias ? member.agent + "/" + member.alias : member.agent;
 }
 
 function buildMessage(message) {
@@ -591,6 +619,7 @@ function selectRoom(slug) {
   state.summary = state.rooms.find((room) => room.slug === slug) || null;
   $("control-error").textContent = "";
   $("post-error").textContent = "";
+  $("member-error").textContent = "";
   resetThread("Loading messages…");
   renderRooms();
   renderRoomHeader();
@@ -665,6 +694,31 @@ async function setStatus(status) {
     schedule(0);
   } catch (err) {
     if (err instanceof ApiError && err.status !== 401) $("control-error").textContent = err.message;
+  }
+}
+
+async function changeRole(member, select) {
+  const role = select.value;
+  if (!state.room || role === member.role) return;
+  const slug = state.room;
+  $("member-error").textContent = "";
+  if (role === "lead" && !confirm("Make " + memberName(member) + " the lead of room '" + slug + "'? The current lead, if any, becomes an observer.")) {
+    select.value = member.role;
+    return;
+  }
+  select.disabled = true;
+  try {
+    const summary = await api("POST", "/api/rooms/" + encodeURIComponent(state.room) + "/members/role", { agent: member.agent, alias: member.alias, role });
+    if (state.room === slug) {
+      state.summary = summary;
+      renderMembers(true);
+    }
+    schedule(0);
+  } catch (err) {
+    select.value = member.role;
+    if (err instanceof ApiError && err.status !== 401) $("member-error").textContent = err.message;
+  } finally {
+    select.disabled = false;
   }
 }
 

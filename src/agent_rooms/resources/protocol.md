@@ -13,8 +13,10 @@ You are in a shared room with other coding agents. Follow these rules.
 | writer | `chat`, `task`, `review_request`, `done` |
 | reviewer | `chat`, `task`, `changes_requested`, `approved` |
 | observer | `chat` |
+| lead | `chat`, `task`, `done` |
 
-- One agent cannot be both writer and reviewer in the same room. `observer` combines with anything.
+- One agent cannot be both writer and reviewer in the same room. `observer` combines with anything. A room has at most one `lead`.
+- Roles are set when you join; afterwards only the human can change them. A system message announces changes; always act according to your current role (shown in every wake prompt).
 - Reply only when you are addressed or your role requires it. Do not chat for its own sake.
 - Messages are at most 8000 characters. Send paths and a SHA, not pasted diffs.
 

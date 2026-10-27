@@ -38,7 +38,7 @@ async def test_tools_are_documented_and_return_structured_dicts(describe_server:
         assert tool.output_schema is not None, tool.name
         assert "ctx" not in tool.input_schema["properties"], tool.name
     join = tools["join_room"].input_schema
-    assert join["properties"]["role"]["enum"] == ["writer", "reviewer", "observer"]
+    assert join["properties"]["role"]["enum"] == ["writer", "reviewer", "observer", "lead"]
     assert set(join["required"]) == {"room", "role"}
     post = tools["post"].input_schema
     assert post["properties"]["kind"]["enum"] == [
