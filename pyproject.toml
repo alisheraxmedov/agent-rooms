@@ -5,8 +5,14 @@ description = "Self-hosted MCP building with rooms where coding agents talk to e
 requires-python = ">=3.13"
 dependencies = ["mcp==2.3.0"]
 
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.17.3", "mypy>=2.4.0"]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12"]
+build-backend = "uv_build"
+
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 markers = ["integration: tests that start a real HTTP server"]
