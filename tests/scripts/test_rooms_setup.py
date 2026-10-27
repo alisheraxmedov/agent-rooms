@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -356,37 +357,133 @@ def test_fs_dry_run_changes_nothing_and_reports(tmp_path, capsys):
     assert "secret-value" not in out
 
 
-def test_tokens_creates_five_tokens_files_and_modes(env):
+AGENT_NAMES = ["agy", "claude", "codex", "opencode"]
+HUMAN_LINE = re.compile(r"^    (\S{32,})$", re.MULTILINE)
+
+
+def sha(token: str) -> str:
+    return "sha256:" + hashlib.sha256(token.encode()).hexdigest()
+
+
+def printed_human_tokens(out: str) -> list[str]:
+    return HUMAN_LINE.findall(out)
+
+
+def plain_tokens(e) -> dict[str, str]:
+    return {a: (e.cfg / f"{a}.token").read_text().strip() for a in AGENT_NAMES}
+
+
+def test_tokens_stores_hashes_in_the_registry_and_plain_tokens_in_agent_files(env):
     assert env.run("tokens") == 0
+    out = env.out()
     agents = json.loads(env.agents_file.read_text())
     assert sorted(agents) == ["agy", "claude", "codex", "human", "opencode"]
+    assert all(re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in agents.values())
     assert len(set(agents.values())) == 5
-    assert all(len(token) >= 32 for token in agents.values())
     assert mode_of(env.agents_file) == 0o600
     assert mode_of(env.cfg) == 0o700
-    for name, token in agents.items():
-        token_file = env.cfg / f"{name}.token"
-        assert token_file.read_text() == token + "\n"
-        assert mode_of(token_file) == 0o600
+    for name, token in plain_tokens(env).items():
+        assert len(token) >= 32
+        assert agents[name] == sha(token)
+        assert mode_of(env.cfg / f"{name}.token") == 0o600
+        assert token not in out
+        assert token not in env.agents_file.read_text()
+    assert not (env.cfg / "human.token").exists()
 
 
-def test_tokens_never_overwrites_and_keeps_other_keys(env):
+def test_tokens_prints_the_human_token_once_with_instructions_and_never_stores_it(env):
+    env.run("tokens")
+    out = env.out()
+    (human,) = printed_human_tokens(out)
+    assert json.loads(env.agents_file.read_text())["human"] == sha(human)
+    assert "password manager" in out
+    assert "web UI" in out
+    for path in env.tmp.rglob("*"):
+        if path.is_file():
+            assert human not in path.read_text(errors="replace")
+
+
+def test_tokens_second_run_changes_nothing_and_prints_no_secret(env):
+    env.run("tokens")
+    (human,) = printed_human_tokens(env.out())
+    before = snapshot(env.tmp)
+    assert env.run("tokens") == 0
+    assert snapshot(env.tmp) == before
+    out = env.out()
+    assert "unchanged" in out
+    assert human not in out
+    assert printed_human_tokens(out) == []
+    for token in plain_tokens(env).values():
+        assert token not in out
+
+
+def test_tokens_hashes_legacy_plain_entries_and_keeps_other_keys(env):
     env.agents_file.write_text(json.dumps({"claude": "c" * 32, "extra": "e" * 32}))
     assert env.run("tokens") == 0
     agents = json.loads(env.agents_file.read_text())
-    assert agents["claude"] == "c" * 32
+    assert agents["claude"] == sha("c" * 32)
     assert agents["extra"] == "e" * 32
     assert {"codex", "opencode", "agy", "human"} <= set(agents)
     assert (env.cfg / "claude.token").read_text() == "c" * 32 + "\n"
 
 
-def test_tokens_second_run_changes_nothing(env):
-    env.run("tokens")
+LEGACY = {name: f"{name}-" + "x" * 30 for name in [*AGENT_NAMES, "human"]}
+
+
+def test_tokens_migrates_a_legacy_plain_registry(env):
+    env.agents_file.write_text(json.dumps(LEGACY))
+    assert env.run("tokens") == 0
+    out = env.out()
+    assert printed_human_tokens(out) == [LEGACY["human"]]
+    assert json.loads(env.agents_file.read_text()) == {name: sha(token) for name, token in LEGACY.items()}
+    for name in AGENT_NAMES:
+        assert (env.cfg / f"{name}.token").read_text() == LEGACY[name] + "\n"
+        assert LEGACY[name] not in out
+    assert LEGACY["human"] not in env.agents_file.read_text()
+    assert not (env.cfg / "human.token").exists()
     before = snapshot(env.tmp)
-    env.out()
     assert env.run("tokens") == 0
     assert snapshot(env.tmp) == before
-    assert "unchanged" in env.out()
+    assert LEGACY["human"] not in env.out()
+
+
+def test_tokens_migration_keeps_an_existing_matching_token_file(env):
+    env.agents_file.write_text(json.dumps(LEGACY))
+    env.cfg.mkdir(parents=True)
+    (env.cfg / "claude.token").write_text(LEGACY["claude"] + "\n")
+    (env.cfg / "claude.token").chmod(0o600)
+    assert env.run("tokens") == 0
+    assert (env.cfg / "claude.token").read_text() == LEGACY["claude"] + "\n"
+
+
+def test_tokens_migration_removes_a_leftover_human_token_file(env):
+    env.agents_file.write_text(json.dumps(LEGACY))
+    env.cfg.mkdir(parents=True)
+    (env.cfg / "human.token").write_text(LEGACY["human"] + "\n")
+    assert env.run("tokens") == 0
+    assert not (env.cfg / "human.token").exists()
+
+
+def test_tokens_reports_a_hashed_agent_whose_token_file_is_missing(env):
+    env.run("tokens")
+    env.out()
+    (env.cfg / "codex.token").unlink()
+    assert env.run("tokens") == 1
+    out = env.out()
+    assert "codex" in out
+    assert "tokens --rotate codex" in out
+    assert not (env.cfg / "codex.token").exists()
+
+
+def test_tokens_reports_a_token_file_that_does_not_match_its_hash(env):
+    env.run("tokens")
+    env.out()
+    (env.cfg / "agy.token").write_text("someone-elses-token\n")
+    assert env.run("tokens") == 1
+    out = env.out()
+    assert "agy" in out
+    assert "tokens --rotate agy" in out
+    assert "someone-elses-token" not in out
 
 
 def test_tokens_repairs_loose_modes(env):
@@ -398,16 +495,6 @@ def test_tokens_repairs_loose_modes(env):
     assert mode_of(env.cfg / "agy.token") == 0o600
 
 
-def test_tokens_never_prints_token_values(env):
-    env.run("tokens")
-    printed = env.out()
-    env.run("tokens")
-    printed += env.out()
-    assert str(env.agents_file) in printed
-    for token in json.loads(env.agents_file.read_text()).values():
-        assert token not in printed
-
-
 def test_tokens_rejects_invalid_agents_json_without_echoing_it(env):
     env.agents_file.write_text("not json SECRETSTUFF")
     assert env.run("tokens") == 1
@@ -417,11 +504,81 @@ def test_tokens_rejects_invalid_agents_json_without_echoing_it(env):
     assert env.agents_file.read_text() == "not json SECRETSTUFF"
 
 
-def test_tokens_dry_run_writes_nothing(env):
+def test_tokens_dry_run_writes_nothing_and_prints_no_token(env):
     assert env.run("--dry-run", "tokens") == 0
     assert not env.agents_file.exists()
     assert not env.cfg.exists()
-    assert "would create" in env.out()
+    out = env.out()
+    assert "would create" in out
+    assert printed_human_tokens(out) == []
+
+
+def test_tokens_dry_run_of_a_migration_keeps_the_plain_registry_and_hides_the_human_token(env):
+    env.agents_file.write_text(json.dumps(LEGACY))
+    before = snapshot(env.tmp)
+    assert env.run("--dry-run", "tokens") == 0
+    assert snapshot(env.tmp) == before
+    out = env.out()
+    assert all(token not in out for token in LEGACY.values())
+
+
+def test_tokens_rotate_an_agent_rewrites_its_file_and_hash_only(env):
+    env.run("tokens")
+    env.out()
+    old_agents = json.loads(env.agents_file.read_text())
+    old_tokens = plain_tokens(env)
+    assert env.run("tokens", "--rotate", "claude") == 0
+    out = env.out()
+    new_agents = json.loads(env.agents_file.read_text())
+    new_tokens = plain_tokens(env)
+    assert new_tokens["claude"] != old_tokens["claude"]
+    assert new_agents["claude"] == sha(new_tokens["claude"])
+    for name in ("codex", "opencode", "agy", "human"):
+        assert new_agents[name] == old_agents[name]
+    assert {k: v for k, v in new_tokens.items() if k != "claude"} == {
+        k: v for k, v in old_tokens.items() if k != "claude"
+    }
+    assert new_tokens["claude"] not in out
+    assert printed_human_tokens(out) == []
+    assert "install" in out
+    assert "restart" in out.lower()
+
+
+@pytest.mark.parametrize(
+    ("agent", "reminder"),
+    [("codex", "install"), ("agy", "enable-repo"), ("opencode", "opencode")],
+)
+def test_tokens_rotate_reminds_which_commands_to_re_run(env, agent, reminder):
+    env.run("tokens")
+    env.out()
+    assert env.run("tokens", "--rotate", agent) == 0
+    assert reminder in env.out()
+
+
+def test_tokens_rotate_human_prints_the_new_token_once_and_writes_no_file(env):
+    env.run("tokens")
+    (old,) = printed_human_tokens(env.out())
+    assert env.run("tokens", "--rotate", "human") == 0
+    out = env.out()
+    (new,) = printed_human_tokens(out)
+    assert new != old
+    assert json.loads(env.agents_file.read_text())["human"] == sha(new)
+    assert not (env.cfg / "human.token").exists()
+    assert "web UI" in out
+
+
+def test_tokens_rotate_rejects_an_unknown_agent(env):
+    with pytest.raises(SystemExit):
+        env.run("tokens", "--rotate", "nobody")
+
+
+def test_tokens_rotate_dry_run_changes_nothing(env):
+    env.run("tokens")
+    env.out()
+    before = snapshot(env.tmp)
+    assert env.run("--dry-run", "tokens", "--rotate", "human") == 0
+    assert snapshot(env.tmp) == before
+    assert printed_human_tokens(env.out()) == []
 
 
 FAKE_CODEX = """#!/usr/bin/env python3
@@ -571,7 +728,7 @@ def installed(env):
     env.out()
     assert env.run("install") == 0
     env.install_output = env.out()
-    env.agents = json.loads(env.agents_file.read_text())
+    env.agents = plain_tokens(env)
     env.profile = env.home / ".codex" / "rooms.config.toml"
     env.claude_dir = env.cfg / "claude"
     env.bin = env.home / ".local" / "bin"
@@ -598,7 +755,7 @@ def test_install_requires_tokens(env):
 def test_install_writes_exactly_the_five_files_plus_record(installed):
     e = installed
     written = {p for p in e.home.rglob("*") if p.is_file()}
-    tokens = {e.cfg / f"{a}.token" for a in rs.AGENTS}
+    tokens = {e.cfg / f"{a}.token" for a in rs.TOKEN_FILE_AGENTS}
     assert written == set(own_files(e)) | tokens | {e.cfg / "installed.json"}
 
 
@@ -658,7 +815,8 @@ def test_install_reuses_trust_without_asking_codex_again(installed, monkeypatch)
     e = installed
     monkeypatch.setattr(rs, "query_codex_hooks", lambda _home: pytest.fail("codex must not be asked again"))
     (e.cfg / "codex.token").write_text("rotated-token-value-1234567890abcdef\n")
-    e.agents_file.write_text(json.dumps({**e.agents, "codex": "rotated-token-value-1234567890abcdef"}))
+    agents = json.loads(e.agents_file.read_text())
+    e.agents_file.write_text(json.dumps({**agents, "codex": sha("rotated-token-value-1234567890abcdef")}))
     assert e.run("install") == 0
     text = e.profile.read_text()
     assert "rotated-token-value-1234567890abcdef" in text
@@ -755,7 +913,7 @@ def test_install_dry_run_with_tokens_changes_nothing_and_hides_tokens(env):
     assert env.run("--dry-run", "install") == 0
     assert snapshot(env.tmp) == before
     out = env.out()
-    for token in json.loads(env.agents_file.read_text()).values():
+    for token in plain_tokens(env).values():
         assert token not in out
 
 
@@ -773,7 +931,7 @@ def test_uninstall_removes_exactly_what_install_created(installed):
     decoys = make_decoys(e.home)
     assert e.run("uninstall") == 0
     remaining = {p for p in e.home.rglob("*") if p.is_file()}
-    tokens = {e.cfg / f"{a}.token" for a in rs.AGENTS}
+    tokens = {e.cfg / f"{a}.token" for a in rs.TOKEN_FILE_AGENTS}
     assert remaining == tokens | {other_bin, other_codex} | set(decoys)
     assert not e.claude_dir.exists()
     for path, content in decoys.items():
@@ -814,7 +972,7 @@ def test_uninstall_ignores_foreign_paths_added_to_the_record(installed):
 def test_uninstall_leaves_tokens_unless_purged(installed):
     e = installed
     e.run("uninstall")
-    assert all((e.cfg / f"{a}.token").is_file() for a in rs.AGENTS)
+    assert all((e.cfg / f"{a}.token").is_file() for a in rs.TOKEN_FILE_AGENTS)
     assert e.agents_file.is_file()
 
 
@@ -961,7 +1119,7 @@ def test_enable_repo_rejects_a_path_that_is_not_a_directory(repo):
 def test_enable_repo_writes_exact_payloads_with_modes(repo):
     e = repo
     assert enable(e) == 0
-    agents = json.loads(e.agents_file.read_text())
+    agents = plain_tokens(e)
     ref = f"{e.home}/.config/agent-rooms/opencode.token"
     assert json.loads(opencode_file(e).read_text()) == rs.render_opencode_project(URL, e.rooms, ref)
     mcp = e.repo / ".agents" / "mcp_config.json"
@@ -978,7 +1136,7 @@ def test_enable_repo_never_prints_tokens(repo):
     enable(e)
     enable(e)
     printed = e.out()
-    for token in json.loads(e.agents_file.read_text()).values():
+    for token in plain_tokens(e).values():
         assert token not in printed
 
 
@@ -1025,7 +1183,7 @@ def test_enable_repo_refuses_jsonc_with_comments_and_prints_the_snippet(repo):
     assert '"rooms-reviewer"' in out
     assert '"location_idle_timeout": "2 hours"' in out
     assert "Bearer {file:" in out
-    assert json.loads(e.agents_file.read_text())["agy"] not in out
+    assert plain_tokens(e)["agy"] not in out
 
 
 def test_enable_repo_refusal_does_not_block_the_agy_files(repo):
@@ -1339,3 +1497,10 @@ def test_every_command_leaves_global_client_configs_untouched(repo):
     for path, content in decoys.items():
         assert path.read_bytes() == content
     assert {d: sorted(str(p) for p in d.rglob("*")) for d in watched} == listing
+
+
+def test_tokens_dry_run_does_not_promise_a_human_token_when_none_is_pending(env):
+    env.run("tokens")
+    env.out()
+    assert env.run("--dry-run", "tokens") == 0
+    assert "human token" not in env.out().lower()

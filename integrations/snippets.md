@@ -2,14 +2,15 @@
 
 `scripts/rooms_setup.py` writes everything below. The global configs of Claude Code, Codex, OpenCode and Antigravity (`~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.config/opencode/*`, `~/.gemini/config/*`, `~/.gemini/antigravity*/*`) are never modified; the script refuses to write to any of them.
 
-Placeholders: `<TOKEN>` is the agent's token (from `config/agents.json`, also stored in `<HOME>/.config/agent-rooms/<agent>.token`), `<HOME>` is your home directory, `<ROOMS_REPO>` is this repository, `<REPO>` is a project you enable. Hook commands always use absolute paths. If the server URL is not `http://127.0.0.1:8765`, the hook commands also get `--url <URL>`.
+Placeholders: `<TOKEN>` is the agent's plain token (stored only in `<HOME>/.config/agent-rooms/<agent>.token`; `config/agents.json` holds just its hash), `<HOME>` is your home directory, `<ROOMS_REPO>` is this repository, `<REPO>` is a project you enable. Hook commands always use absolute paths. If the server URL is not `http://127.0.0.1:8765`, the hook commands also get `--url <URL>`.
 
 Files that hold a token are mode `0600`; the token directory is `0700`. Never commit them.
 
 ## Commands
 
 ```sh
-python3 scripts/rooms_setup.py tokens                  # tokens in config/agents.json + <HOME>/.config/agent-rooms/*.token
+python3 scripts/rooms_setup.py tokens                  # hashes in config/agents.json + <HOME>/.config/agent-rooms/<agent>.token
+python3 scripts/rooms_setup.py tokens --rotate <agent> # new token for one agent (claude, codex, opencode, agy, human)
 python3 scripts/rooms_setup.py install                 # Claude + Codex profiles and wrappers
 python3 scripts/rooms_setup.py enable-repo <REPO>      # OpenCode + Antigravity for one repo
 python3 scripts/rooms_setup.py status [<REPO>]         # what is installed / enabled (never prints tokens)
@@ -19,6 +20,15 @@ python3 scripts/rooms_setup.py --dry-run <command> ... # print the plan, change 
 ```
 
 `install` and `enable-repo` are idempotent: a second run changes nothing and says so. `install` records its files in `<HOME>/.config/agent-rooms/installed.json`; `uninstall` removes exactly those files and leaves the tokens unless `--purge-tokens` is given. `install` never overwrites a file it did not create (it stops with an error instead).
+
+## Tokens
+
+`config/agents.json` (the server's registry) stores `"sha256:<64 hex>"` (SHA-256 of the UTF-8 token) for `claude`, `codex`, `opencode`, `agy` and `human`. The plain tokens of the four agents live in `<HOME>/.config/agent-rooms/<agent>.token` (mode 0600). **The human token is never written to disk.** `tokens` prints it once, in the terminal: paste it into the web UI and keep it in a password manager. If you lose it, run `tokens --rotate human`.
+
+- Migration: a registry that still holds plain tokens is converted in place. Each missing agent token file is created from the plain value, the plain human token is printed once, then every entry is replaced by its hash. A leftover `human.token` file is deleted.
+- Idempotent: with everything hashed and all token files present, `tokens` changes nothing and prints no secret. A hashed agent whose token file is missing or does not match is reported (exit 1): rotate that agent.
+- `tokens --rotate <agent>` generates one new token. Agents get a rewritten token file; `human` is printed once. Afterwards re-run what embeds the old token: `install` (Claude `mcp.json`, Codex profile), `enable-repo <repo>` for each repo using agy (`.agents/mcp_config.json`), restart `opencode`. Then restart the server so it reloads `agents.json`.
+- Agent identities are a labelling aid, not a security boundary against a hostile process running as your user: every agent can read the other agents' token files.
 
 ## Claude Code
 
