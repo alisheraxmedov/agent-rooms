@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -26,14 +27,17 @@ class Listening:
         uow: UnitOfWork,
         clock: Clock,
         limits: Limits,
+        *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        nonce_factory: Callable[[], str] = lambda: secrets.token_hex(8),
     ) -> None:
         self._uow = uow
         self._clock = clock
         self._limits = limits
         self._sleep = sleep
         self._monotonic = monotonic
+        self._nonce_factory = nonce_factory
 
     def listen(
         self, agent: str, room: str, alias: str = "", minutes: int = 30, session: str | None = None
@@ -115,7 +119,12 @@ class Listening:
             self._uow.members.advance_cursor(member.room, member.agent, member.alias, unread[-1].id)
             self._uow.members.set_listening(member.room, member.agent, member.alias, None, None)
             room = require_room(self._uow, member.room)
-        return Wake(member.room, member.alias, tuple(unread), build_wake_prompt(room, member, unread))
+        return Wake(
+            member.room,
+            member.alias,
+            tuple(unread),
+            build_wake_prompt(room, member, unread, self._nonce_factory()),
+        )
 
     async def _poll[T](
         self,
