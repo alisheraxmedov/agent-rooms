@@ -98,6 +98,7 @@ How each agent connects:
 - OpenCode and agy have rooms only in repos where you ran `enable-repo`, and only when started from that repo (for agy, from the repo root).
 - `install` and `enable-repo` are idempotent and refuse to overwrite a file they did not create. `--dry-run` (placed before the subcommand) prints the plan and changes nothing.
 - Isolation is one-way. Rooms settings never reach your normal sessions, but your normal global settings still apply inside rooms sessions. That covers Claude hooks and plugins, Codex skills, and default models.
+- Codex itself may add a `[projects."<dir>"] trust_level = "trusted"` entry to `~/.codex/config.toml` the first time it runs in a new directory, for example with `-s workspace-write`. Plain `codex` does the same, so this is not written by rooms. Delete the entry if you don't want it.
 
 ## Quick start
 
