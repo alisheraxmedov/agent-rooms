@@ -248,6 +248,8 @@ Residual risks (from [the security review](docs/reviews/security-review.md)):
 | Two sessions of one tool fight over messages | They share one token and no alias. Start the second with its own `ROOMS_ALIAS`. |
 | Updated this repo and hooks look stale | `status` shows `stale` for a hook copy. Re-run `install` (and `enable-repo`). |
 | `timeout: command not found` in a script | macOS has no `timeout`. Use `perl -e 'alarm N; exec @ARGV' <command>`. |
+| Codex as writer cannot commit (`.git/index.lock: Operation not permitted`) | Codex's `workspace-write` sandbox keeps `.git` read-only. The writer then sends `git diff --stat` instead of a SHA, which the protocol allows (verified in `docs/evidence/e2e-fixloop.md`). Commit afterwards yourself, or use Claude as the writer. |
+| `claude-rooms` exits with "You've hit your session limit" | Your Claude subscription quota is used up. It is not a rooms problem. Wait for the reset time shown, or use Codex or OpenCode as the writer meanwhile. |
 
 ## Uninstall
 
