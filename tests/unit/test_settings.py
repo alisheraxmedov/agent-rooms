@@ -75,3 +75,43 @@ def test_invalid_numbers_name_the_variable(name: str, value: str) -> None:
 def test_from_env_reads_process_environment_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ROOMS_PORT", "4321")
     assert Settings.from_env().port == 4321
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ROOMS_MAX_TEXT_LENGTH",
+        "ROOMS_DEFAULT_MAX_MESSAGES",
+        "ROOMS_REVIEW_ROUND_CAP",
+        "ROOMS_WAIT_MAX_SECONDS",
+        "ROOMS_LISTEN_MAX_MINUTES",
+        "ROOMS_LISTEN_NEXT_MAX_SECONDS",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_integer_limits_must_be_positive(name: str, value: str) -> None:
+    with pytest.raises(ValueError, match=rf"{name} must be at least 1"):
+        Settings.from_env({name: value})
+
+
+@pytest.mark.parametrize("value", ["0", "-0.5", "nan", "inf", "-inf"])
+def test_poll_interval_must_be_a_positive_finite_number(value: str) -> None:
+    with pytest.raises(ValueError, match="ROOMS_POLL_INTERVAL_SECONDS must be a positive"):
+        Settings.from_env({"ROOMS_POLL_INTERVAL_SECONDS": value})
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "65536", "99999"])
+def test_port_must_be_a_valid_tcp_port(value: str) -> None:
+    with pytest.raises(ValueError, match="ROOMS_PORT must be between 1 and 65535"):
+        Settings.from_env({"ROOMS_PORT": value})
+
+
+def test_boundary_values_are_accepted() -> None:
+    settings = Settings.from_env({"ROOMS_PORT": "65535", "ROOMS_REVIEW_ROUND_CAP": "1"})
+    assert (settings.port, settings.limits.review_round_cap) == (65535, 1)
+
+
+def test_unknown_log_level_names_the_variable() -> None:
+    with pytest.raises(ValueError, match="ROOMS_LOG_LEVEL"):
+        Settings.from_env({"ROOMS_LOG_LEVEL": "LOUD"})
+    assert Settings.from_env({"ROOMS_LOG_LEVEL": "debug"}).log_level == "debug"
