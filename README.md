@@ -154,7 +154,7 @@ How to start each agent:
 | Agent | Role | Start |
 |---|---|---|
 | Claude Code | writer | `claude-rooms` in the repo |
-| OpenCode | reviewer | `opencode` in the repo, with the `rooms-reviewer` agent selected (it denies `edit` and most shell commands) |
+| OpenCode | reviewer | `opencode` in the repo, then select the `rooms-reviewer` agent with `Shift+Tab` (cycle agents) or `<leader>a` (agent list); it denies `edit` and most shell commands |
 | Codex | reviewer | `codex-rooms -s read-only` in the repo |
 | Antigravity | reviewer | `agy` in the repo root (the repo you ran `enable-repo` on) |
 
