@@ -178,7 +178,9 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
         { "action": "shell", "resource": "git log *", "effect": "allow" },
         { "action": "shell", "resource": "git show *", "effect": "allow" },
         { "action": "shell", "resource": "git status *", "effect": "allow" },
-        { "action": "shell", "resource": "git * --output*", "effect": "deny" }
+        { "action": "shell", "resource": "git * --output*", "effect": "deny" },
+        { "action": "shell", "resource": "*>*", "effect": "deny" },
+        { "action": "shell", "resource": "*<*", "effect": "deny" }
       ]
     }
   },
@@ -188,7 +190,7 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
 
 - The script merges into an existing file and keeps every key it does not own. It adds `$schema` only when missing, keeps your own `experimental.location_idle_timeout` if you set one, and writes plain JSON (valid JSONC).
 - If an existing file contains comments or is not plain JSON, the script **refuses to edit it** and prints this snippet so you can add it by hand. `enable-repo` is all-or-nothing: it reads and plans all three repo files first and writes nothing (no repo file, no hook copy, no exclude line) when any of them is refused or has an unexpected shape.
-- `rooms-reviewer` denies `edit` and denies `shell` except `git diff`, `git log`, `git show` and `git status` (with or without arguments; `git ... --output*` is denied because it writes files). OpenCode V2 evaluates the **last matching rule** ([permissions](https://opencode.ai/v2/docs/permissions)), so the broad deny comes first and the allow rules after it; a pattern ending in ` *` also matches the bare command. Agent rules are appended after the global ones, so the global `rooms_*` allow still applies to the reviewer. Compound commands are scanned per part and any `deny` wins, but the scanner is best effort: the allow-list is a guard rail, not a sandbox. Other agents (`build`, ...) keep OpenCode's default policy, where `shell` and `edit` are allowed.
+- `rooms-reviewer` denies `edit` and denies `shell` except `git diff`, `git log`, `git show` and `git status` (with or without arguments; `git ... --output*` is denied because it writes files, and any `>` or `<` anywhere in the command is denied: OpenCode's shell scanner does not split redirects, so `git status > file` would otherwise match the allow rule. This also denies `2>&1` and here-docs.) OpenCode V2 evaluates the **last matching rule** ([permissions](https://opencode.ai/v2/docs/permissions)), so the broad deny comes first and the allow rules after it; a pattern ending in ` *` also matches the bare command. Agent rules are appended after the global ones, so the global `rooms_*` allow still applies to the reviewer. Compound commands are scanned per part and any `deny` wins, but the scanner is best effort: the allow-list is a guard rail, not a sandbox. Other agents (`build`, ...) keep OpenCode's default policy, where `shell` and `edit` are allowed.
 - **The plugin prefixes every prompt it injects** with `[agent-rooms plugin] Delivered automatically by the agent-rooms plugin; not typed by the user.` and a blank line, so the session can tell a delivered room wake-up from something the user typed. If `session.prompt` fails the plugin retries once after 1 s. If the event stream ends or throws while the plugin is still active, it resubscribes after a 2 s backoff.
 - The plugin delivers at most once: a wake-up that is consumed but cannot be injected (both attempts failed) is not redelivered. Call `read` to catch up, and use the web UI for the full thread.
 

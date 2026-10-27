@@ -119,12 +119,16 @@ def render_codex_trust_state(key: str, trusted_hash: str) -> str:
 
 
 REVIEWER_GIT_COMMANDS = ("git diff *", "git log *", "git show *", "git status *")
-# OpenCode V2 evaluates the last matching rule, so the broad deny comes first and the allows after it.
+# OpenCode V2 evaluates the last matching rule: broad deny first, then the allows, the redirect denies last.
+# Its shell scanner splits `&&`, `;`, pipes and `$(...)` but not redirects, and `*` matches any characters
+# (spaces included), so `*>*` and `*<*` catch a redirect anywhere in an otherwise allowed command.
 REVIEWER_PERMISSIONS = [
     {"action": "edit", "resource": "*", "effect": "deny"},
     {"action": "shell", "resource": "*", "effect": "deny"},
     *({"action": "shell", "resource": command, "effect": "allow"} for command in REVIEWER_GIT_COMMANDS),
     {"action": "shell", "resource": "git * --output*", "effect": "deny"},
+    {"action": "shell", "resource": "*>*", "effect": "deny"},
+    {"action": "shell", "resource": "*<*", "effect": "deny"},
 ]
 
 

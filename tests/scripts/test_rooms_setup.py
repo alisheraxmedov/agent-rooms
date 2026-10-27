@@ -130,6 +130,8 @@ REVIEWER_PERMISSIONS = [
     {"action": "shell", "resource": "git show *", "effect": "allow"},
     {"action": "shell", "resource": "git status *", "effect": "allow"},
     {"action": "shell", "resource": "git * --output*", "effect": "deny"},
+    {"action": "shell", "resource": "*>*", "effect": "deny"},
+    {"action": "shell", "resource": "*<*", "effect": "deny"},
 ]
 
 
@@ -172,7 +174,7 @@ def wildcard(pattern: str, value: str) -> bool:
 
     def matches(text: str) -> bool:
         regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in text)
-        return re.fullmatch(regex, value) is not None
+        return re.fullmatch(regex, value, re.DOTALL) is not None
 
     return matches(pattern) or (pattern.endswith(" *") and matches(pattern[:-2]))
 
@@ -201,6 +203,16 @@ def evaluate(rules, action, resource):
         ("shell", "git diff --output=/tmp/x", "deny"),
         ("shell", "git log --output=notes", "deny"),
         ("shell", "git difftool", "deny"),
+        ("shell", "git status > x", "deny"),
+        ("shell", "git status >x", "deny"),
+        ("shell", "git diff >> y", "deny"),
+        ("shell", "git log 2>&1", "deny"),
+        ("shell", "git show HEAD > z", "deny"),
+        ("shell", "git status <in", "deny"),
+        ("shell", "git status <<EOF", "deny"),
+        ("shell", "git diff --stat >/dev/null", "deny"),
+        ("shell", "git log -1", "allow"),
+        ("shell", "git show HEAD:README.md", "allow"),
     ],
 )
 def test_rooms_reviewer_permissions_allow_only_read_only_git(action, resource, effect):
