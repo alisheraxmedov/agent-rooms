@@ -125,3 +125,75 @@ def test_leave_when_not_a_member(membership: Membership, rooms: RoomAdmin) -> No
 def test_leave_unknown_room(membership: Membership) -> None:
     with pytest.raises(RoomNotFound):
         membership.leave("claude", "ghost")
+
+
+class TestRoleExclusivity:
+    def test_one_agent_cannot_be_writer_and_reviewer_across_aliases(
+        self, membership: Membership, rooms: RoomAdmin, uow: SqliteUnitOfWork
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("codex", "alpha", Role.REVIEWER)
+
+        with pytest.raises(InvalidInput, match="cannot be both writer and reviewer in room 'alpha'"):
+            membership.join("codex", "alpha", Role.WRITER, alias="sneaky")
+
+        assert [m.alias for m in uow.members.list_for_room("alpha")] == [""]
+
+    def test_it_works_in_the_other_direction_too(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER, alias="one")
+
+        with pytest.raises(InvalidInput, match="cannot be both writer and reviewer"):
+            membership.join("claude", "alpha", Role.REVIEWER, alias="two")
+
+    def test_switching_the_role_of_a_single_persona_is_allowed(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER)
+
+        membership.join("claude", "alpha", Role.REVIEWER)
+
+    def test_switching_one_persona_into_conflict_with_another_is_rejected(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER, alias="a")
+        membership.join("claude", "alpha", Role.WRITER, alias="b")
+
+        with pytest.raises(InvalidInput):
+            membership.join("claude", "alpha", Role.REVIEWER, alias="a")
+
+    @pytest.mark.parametrize("other", [Role.WRITER, Role.REVIEWER, Role.OBSERVER])
+    def test_observer_combines_with_anything(
+        self, membership: Membership, rooms: RoomAdmin, other: Role
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", other)
+
+        membership.join("claude", "alpha", Role.OBSERVER, alias="watcher")
+
+        assert len(rooms.get_summary("alpha").members) == 2
+
+    def test_two_writers_under_different_aliases_are_fine(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER, alias="a")
+        membership.join("claude", "alpha", Role.WRITER, alias="b")
+
+    def test_the_restriction_is_per_room(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+        rooms.create_room("beta", "t")
+        membership.join("claude", "alpha", Role.WRITER)
+
+        membership.join("claude", "beta", Role.REVIEWER)
+
+    def test_leaving_the_other_persona_lifts_the_restriction(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER)
+        membership.leave("claude", "alpha")
+
+        membership.join("claude", "alpha", Role.REVIEWER, alias="now-reviewer")

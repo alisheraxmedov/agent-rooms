@@ -21,6 +21,10 @@ class RoomNotActive(DomainError):
     code = "room_not_active"
 
 
+class RoomNotClosed(DomainError):
+    code = "room_not_closed"
+
+
 class NotAMember(DomainError):
     code = "not_a_member"
 

@@ -46,6 +46,14 @@ def _layer_imports(layer: str) -> list[tuple[Path, str]]:
     ]
 
 
+def _imports_in(directory: Path) -> list[tuple[Path, str]]:
+    return [
+        (path, imported)
+        for path in sorted(directory.rglob("*.py"))
+        for imported in sorted(_absolute_imports(path))
+    ]
+
+
 def _is_under(imported: str, prefix: str) -> bool:
     return imported == prefix or imported.startswith(prefix + ".")
 
@@ -94,6 +102,23 @@ def test_infrastructure_never_imports_presentation_or_web_frameworks() -> None:
 
 def test_presentation_never_imports_infrastructure_or_composition_root() -> None:
     assert _forbidden("presentation", (f"{PACKAGE}.infrastructure", f"{PACKAGE}.bootstrap")) == []
+
+
+def test_presentation_mcp_and_http_do_not_import_each_other() -> None:
+    presentation = SRC / PACKAGE / "presentation"
+    mcp, http = f"{PACKAGE}.presentation.mcp", f"{PACKAGE}.presentation.http"
+    found = [
+        f"{path.relative_to(SRC)} imports {imported}"
+        for directory, forbidden in ((presentation / "mcp", http), (presentation / "http", mcp))
+        for path, imported in _imports_in(directory)
+        if _is_under(imported, forbidden)
+    ]
+    assert found == []
+
+
+def test_the_shared_identity_module_depends_on_nothing_in_the_app() -> None:
+    identity = SRC / PACKAGE / "presentation" / "identity.py"
+    assert [i for i in _absolute_imports(identity) if i.startswith(PACKAGE)] == []
 
 
 def test_relative_imports_are_resolved_against_the_importing_package() -> None:

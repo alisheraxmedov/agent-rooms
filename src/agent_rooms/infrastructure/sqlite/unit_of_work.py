@@ -129,6 +129,9 @@ class SqliteRoomRepository:
     def reset_budget(self, slug: str, budget_start_id: int) -> None:
         self._db.run("UPDATE rooms SET budget_start_id = ? WHERE slug = ?", (budget_start_id, slug))
 
+    def delete(self, slug: str) -> bool:
+        return self._db.run("DELETE FROM rooms WHERE slug = ?", (slug,)).rowcount > 0
+
 
 class SqliteMemberRepository:
     def __init__(self, db: _Database) -> None:
@@ -176,6 +179,11 @@ class SqliteMemberRepository:
             "UPDATE members SET listening_until = ?, listener_session = ? "
             "WHERE room = ? AND agent = ? AND alias = ?",
             (None if until is None else _to_text(until), session, room, agent, alias),
+        )
+
+    def clear_listening_in_room(self, room: str) -> None:
+        self._db.run(
+            "UPDATE members SET listening_until = NULL, listener_session = NULL WHERE room = ?", (room,)
         )
 
     def advance_cursor(self, room: str, agent: str, alias: str, last_read_id: int) -> None:

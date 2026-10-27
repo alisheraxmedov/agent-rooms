@@ -1,10 +1,10 @@
 import json
+from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
-from starlette.routing import Route
 
 from agent_rooms.application.dto import Wake
 from agent_rooms.application.limits import Limits
@@ -13,8 +13,9 @@ from agent_rooms.application.services.messaging import Messaging
 from agent_rooms.application.services.rooms import RoomAdmin
 from agent_rooms.domain.errors import InvalidInput
 from agent_rooms.domain.models import parse_kind, parse_status, validate_alias
-from agent_rooms.presentation.http.auth import agent_of
-from agent_rooms.presentation.http.errors import HttpError, api_errors
+from agent_rooms.presentation.http.csp import content_security_policy
+from agent_rooms.presentation.http.errors import Endpoint, HttpError, api_errors
+from agent_rooms.presentation.identity import agent_of
 from agent_rooms.presentation.serializers import message_json, summary_json, wake_json
 
 MAX_BODY_BYTES = 64 * 1024
@@ -22,16 +23,18 @@ MAX_SESSION_LENGTH = 128
 HISTORY_DEFAULT_LIMIT = 200
 WEB_UI = files("agent_rooms") / "presentation" / "http" / "web" / "index.html"
 
-WEB_UI_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-        "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
-        "frame-ancestors 'none'"
-    ),
+SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class RouteSpec:
+    path: str
+    methods: tuple[str, ...]
+    endpoint: Endpoint
 
 
 def _too_large() -> HttpError:
@@ -65,17 +68,14 @@ def _string(body: dict[str, Any], name: str, default: str | None = None) -> str:
     return value
 
 
-def _int_param(request: Request, name: str, default: int, *, minimum: int | None = None) -> int:
+def _int_param(request: Request, name: str, default: int) -> int:
     raw = request.query_params.get(name)
     if raw is None:
         return default
     try:
-        value = int(raw)
+        return int(raw)
     except ValueError:
         raise InvalidInput(f"Query parameter '{name}' must be an integer.") from None
-    if minimum is not None and value < minimum:
-        raise InvalidInput(f"Query parameter '{name}' must be at least {minimum}.")
-    return value
 
 
 def _session_param(request: Request) -> str | None:
@@ -92,12 +92,15 @@ def _alias_param(request: Request) -> str | None:
 
 def build_routes(
     *, rooms: RoomAdmin, messaging: Messaging, listening: Listening, limits: Limits
-) -> list[Route]:
+) -> list[RouteSpec]:
+    page = WEB_UI.read_text(encoding="utf-8")
+    page_headers = {"Content-Security-Policy": content_security_policy(page), **SECURITY_HEADERS}
+
     async def healthz(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
     async def index(_request: Request) -> Response:
-        return HTMLResponse(WEB_UI.read_text(encoding="utf-8"), headers=WEB_UI_HEADERS)
+        return HTMLResponse(page, headers=page_headers)
 
     @api_errors
     async def list_rooms(_request: Request) -> Response:
@@ -112,7 +115,7 @@ def build_routes(
     @api_errors
     async def room_messages(request: Request) -> Response:
         slug = request.path_params["room"]
-        after = _int_param(request, "after", 0, minimum=0)
+        after = _int_param(request, "after", 0)
         limit = _int_param(request, "limit", HISTORY_DEFAULT_LIMIT)
         summary = rooms.get_summary(slug)
         messages = messaging.history(slug, after, limit)
@@ -137,6 +140,11 @@ def build_routes(
         return JSONResponse(summary_json(summary))
 
     @api_errors
+    async def delete_room(request: Request) -> Response:
+        rooms.delete_room(request.path_params["room"])
+        return Response(status_code=204)
+
+    @api_errors
     async def listen_next(request: Request) -> Response:
         timeout = _int_param(request, "timeout", limits.listen_next_default_s)
         result = await listening.next_for_listener(
@@ -151,12 +159,13 @@ def build_routes(
         return Response(status_code=204, headers={"X-Listen-State": result.reason})
 
     return [
-        Route("/healthz", healthz, methods=["GET"]),
-        Route("/", index, methods=["GET"]),
-        Route("/api/rooms", list_rooms, methods=["GET"]),
-        Route("/api/rooms", create_room, methods=["POST"]),
-        Route("/api/rooms/{room}/messages", room_messages, methods=["GET"]),
-        Route("/api/rooms/{room}/messages", post_message, methods=["POST"]),
-        Route("/api/rooms/{room}/status", set_status, methods=["POST"]),
-        Route("/api/listen/next", listen_next, methods=["GET"]),
+        RouteSpec("/healthz", ("GET",), healthz),
+        RouteSpec("/", ("GET",), index),
+        RouteSpec("/api/rooms", ("GET",), list_rooms),
+        RouteSpec("/api/rooms", ("POST",), create_room),
+        RouteSpec("/api/rooms/{room}", ("DELETE",), delete_room),
+        RouteSpec("/api/rooms/{room}/messages", ("GET",), room_messages),
+        RouteSpec("/api/rooms/{room}/messages", ("POST",), post_message),
+        RouteSpec("/api/rooms/{room}/status", ("POST",), set_status),
+        RouteSpec("/api/listen/next", ("GET",), listen_next),
     ]

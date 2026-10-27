@@ -174,6 +174,25 @@ class TestMembers:
         assert member is not None
         assert (member.listening_until, member.listener_session) == (None, None)
 
+    def test_clear_listening_in_room_clears_every_member_of_that_room_only(
+        self, uow: SqliteUnitOfWork
+    ) -> None:
+        for room, agent, alias in (("alpha", "claude", ""), ("alpha", "codex", "x"), ("other", "claude", "")):
+            uow.members.upsert(make_member(agent, room=room, alias=alias))
+            uow.members.set_listening(room, agent, alias, at(60), "ses_A")
+
+        uow.members.clear_listening_in_room("alpha")
+
+        for room, agent, alias, listening in (
+            ("alpha", "claude", "", None),
+            ("alpha", "codex", "x", None),
+            ("other", "claude", "", at(60)),
+        ):
+            member = uow.members.get(room, agent, alias)
+            assert member is not None
+            assert member.listening_until == listening
+            assert member.listener_session == (None if listening is None else "ses_A")
+
     def test_advance_cursor_never_moves_backwards(self, uow: SqliteUnitOfWork) -> None:
         uow.members.upsert(make_member())
         uow.members.advance_cursor("alpha", "claude", "", 10)
@@ -391,11 +410,25 @@ class TestPersistence:
             second.close()
 
 
-class TestCascade:
-    def test_deleting_a_room_removes_members_and_messages(self, uow: SqliteUnitOfWork) -> None:
+class TestDelete:
+    def test_deleting_a_room_removes_members_and_messages_including_reply_chains(
+        self, uow: SqliteUnitOfWork
+    ) -> None:
         uow.rooms.add(make_room())
+        uow.rooms.add(make_room("other"))
         uow.members.upsert(make_member())
-        post(uow)
-        uow.connection.execute("DELETE FROM rooms WHERE slug = 'alpha'")
+        uow.members.upsert(make_member(room="other"))
+        first = post(uow)
+        post(uow, reply_to=first.id)
+        post(uow, room="other")
+
+        assert uow.rooms.delete("alpha") is True
+
+        assert uow.rooms.get("alpha") is None
         assert uow.members.list_for_room("alpha") == []
         assert uow.messages.count("alpha") == 0
+        assert uow.messages.count("other") == 1
+        assert len(uow.members.list_for_room("other")) == 1
+
+    def test_deleting_an_unknown_room_returns_false(self, uow: SqliteUnitOfWork) -> None:
+        assert uow.rooms.delete("ghost") is False

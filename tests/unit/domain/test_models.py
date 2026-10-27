@@ -10,10 +10,12 @@ from agent_rooms.domain.errors import (
     NotAMember,
     RoomAlreadyExists,
     RoomNotActive,
+    RoomNotClosed,
     RoomNotFound,
 )
 from agent_rooms.domain.models import (
     HUMAN,
+    MAX_INT,
     SYSTEM,
     Member,
     Message,
@@ -25,6 +27,7 @@ from agent_rooms.domain.models import (
     parse_role,
     parse_status,
     validate_alias,
+    validate_int,
     validate_slug,
     validate_text,
     validate_topic,
@@ -182,6 +185,7 @@ def test_entities_are_frozen_and_slotted() -> None:
         (RoomNotFound, "room_not_found"),
         (RoomAlreadyExists, "room_exists"),
         (RoomNotActive, "room_not_active"),
+        (RoomNotClosed, "room_not_closed"),
         (NotAMember, "not_a_member"),
         (KindNotAllowed, "kind_not_allowed"),
         (GuardTripped, "guard_tripped"),
@@ -191,3 +195,17 @@ def test_error_codes(error: type[DomainError], code: str) -> None:
     assert error.code == code
     assert issubclass(error, DomainError)
     assert str(error("something actionable")) == "something actionable"
+
+
+class TestValidateInt:
+    @pytest.mark.parametrize("value", [0, 1, 540, MAX_INT])
+    def test_values_in_range_pass_through(self, value: int) -> None:
+        assert validate_int("limit", value) == value
+
+    @pytest.mark.parametrize("value", [-1, MAX_INT + 1, 2**63, 10**30, -(10**30)])
+    def test_out_of_range_values_are_invalid_input_naming_the_field(self, value: int) -> None:
+        with pytest.raises(InvalidInput, match="limit"):
+            validate_int("limit", value)
+
+    def test_the_upper_bound_is_two_to_the_53(self) -> None:
+        assert MAX_INT == 2**53

@@ -11,6 +11,7 @@ STATUS_BY_CODE = {
     "room_not_found": 404,
     "room_exists": 409,
     "room_not_active": 409,
+    "room_not_closed": 409,
     "not_a_member": 409,
     "kind_not_allowed": 403,
     "guard_tripped": 409,

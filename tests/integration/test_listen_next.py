@@ -221,6 +221,13 @@ async def test_session_of_exactly_128_chars_is_accepted(rest: Any) -> None:
 
 
 @pytest.mark.anyio
-async def test_huge_and_negative_timeouts_are_clamped_not_rejected(rest: Any) -> None:
+async def test_huge_timeouts_are_clamped_not_rejected(rest: Any) -> None:
     assert (await rest("codex", "GET", "/api/listen/next", params={"timeout": 999999})).status_code == 204
-    assert (await rest("codex", "GET", "/api/listen/next", params={"timeout": -5})).status_code == 204
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("timeout", [-5, 2**53 + 1, 10**30])
+async def test_out_of_range_timeouts_are_400_not_500(rest: Any, timeout: int) -> None:
+    response = await rest("codex", "GET", "/api/listen/next", params={"timeout": timeout})
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_input"

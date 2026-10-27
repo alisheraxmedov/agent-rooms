@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 
 import uvicorn
@@ -8,6 +9,7 @@ from agent_rooms.settings import Settings
 
 
 def main() -> None:
+    os.umask(0o077)
     try:
         settings = Settings.from_env()
         app = create_app(settings)

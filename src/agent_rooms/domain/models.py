@@ -11,6 +11,7 @@ SYSTEM = "system"
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _ALIAS = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _TOPIC_MAX = 500
+MAX_INT = 2**53
 
 
 class RoomStatus(StrEnum):
@@ -58,6 +59,12 @@ def validate_topic(topic: str) -> str:
     if not 1 <= len(stripped) <= _TOPIC_MAX:
         raise InvalidInput(f"Topic must be 1-{_TOPIC_MAX} characters.")
     return stripped
+
+
+def validate_int(name: str, value: int) -> int:
+    if not 0 <= value <= MAX_INT:
+        raise InvalidInput(f"{name} must be an integer between 0 and {MAX_INT}.")
+    return value
 
 
 def validate_text(text: str, max_length: int) -> str:

@@ -1,6 +1,8 @@
 import pytest
+from fakes import FakeClock
 
 from agent_rooms.application.limits import Limits
+from agent_rooms.application.services._summaries import summarize
 from agent_rooms.application.services.listening import Listening
 from agent_rooms.application.services.membership import Membership
 from agent_rooms.application.services.messaging import Messaging
@@ -10,6 +12,7 @@ from agent_rooms.domain.errors import (
     InvalidInput,
     RoomAlreadyExists,
     RoomNotActive,
+    RoomNotClosed,
     RoomNotFound,
 )
 from agent_rooms.domain.models import MessageKind, Role, RoomStatus
@@ -156,3 +159,78 @@ def test_resume_gives_a_fresh_message_budget(
         messaging.post("claude", "alpha", f"fresh {i}")
     with pytest.raises(GuardTripped):
         messaging.post("claude", "alpha", "over again")
+
+
+@pytest.mark.parametrize("status", [RoomStatus.PAUSED, RoomStatus.CLOSED])
+def test_pausing_or_closing_releases_every_listener(
+    rooms: RoomAdmin,
+    membership: Membership,
+    listening: Listening,
+    uow: SqliteUnitOfWork,
+    alpha: str,
+    status: RoomStatus,
+) -> None:
+    membership.join("claude", alpha, Role.WRITER, alias="fixer")
+    listening.listen("claude", alpha, session="ses_A")
+    listening.listen("claude", alpha, alias="fixer")
+    listening.listen("codex", alpha)
+
+    summary = rooms.set_status(alpha, status)
+
+    assert [m.listening for m in summary.members] == [False, False, False]
+    for member in uow.members.list_for_room(alpha):
+        assert (member.listening_until, member.listener_session) == (None, None)
+
+
+def test_resuming_does_not_make_anybody_listen_again(
+    rooms: RoomAdmin, listening: Listening, alpha: str
+) -> None:
+    listening.listen("codex", alpha)
+    rooms.set_status(alpha, RoomStatus.PAUSED)
+
+    summary = rooms.set_status(alpha, RoomStatus.ACTIVE)
+
+    assert [m.listening for m in summary.members] == [False, False]
+
+
+def test_delete_room_removes_a_closed_room_with_its_members_and_messages(
+    rooms: RoomAdmin, messaging: Messaging, uow: SqliteUnitOfWork, alpha: str
+) -> None:
+    messaging.post("claude", alpha, "hello")
+    rooms.set_status(alpha, RoomStatus.CLOSED)
+
+    rooms.delete_room(alpha)
+
+    assert uow.rooms.get(alpha) is None
+    assert uow.members.list_for_room(alpha) == []
+    assert uow.messages.count(alpha) == 0
+
+
+@pytest.mark.parametrize("status", [RoomStatus.ACTIVE, RoomStatus.PAUSED])
+def test_delete_room_refuses_rooms_that_are_not_closed(
+    rooms: RoomAdmin, uow: SqliteUnitOfWork, alpha: str, status: RoomStatus
+) -> None:
+    rooms.set_status(alpha, status)
+
+    with pytest.raises(RoomNotClosed, match="Close the room first"):
+        rooms.delete_room(alpha)
+
+    assert uow.rooms.get(alpha) is not None
+
+
+def test_delete_room_of_unknown_room(rooms: RoomAdmin) -> None:
+    with pytest.raises(RoomNotFound):
+        rooms.delete_room("ghost")
+
+
+def test_summarize_lives_in_the_shared_summaries_module(
+    uow: SqliteUnitOfWork, clock: FakeClock, alpha: str, messaging: Messaging
+) -> None:
+    messaging.post("claude", alpha, "hello")
+    room = uow.rooms.get(alpha)
+    assert room is not None
+
+    summary = summarize(uow, clock, room)
+
+    assert (summary.slug, summary.message_count) == (alpha, 1)
+    assert [(m.agent, m.listening) for m in summary.members] == [("claude", False), ("codex", False)]

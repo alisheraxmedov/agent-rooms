@@ -5,13 +5,14 @@ from typing import Any, Literal
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from agent_rooms.application.dto import UNTRUSTED_NOTICE
 from agent_rooms.application.services.listening import Listening
 from agent_rooms.application.services.membership import Membership
 from agent_rooms.application.services.messaging import Messaging
 from agent_rooms.application.services.rooms import RoomAdmin
 from agent_rooms.domain.errors import DomainError
 from agent_rooms.domain.models import parse_kind, parse_role
-from agent_rooms.presentation.http.auth import agent_of
+from agent_rooms.presentation.identity import agent_of
 from agent_rooms.presentation.serializers import iso, message_json, summary_json
 
 OPENCODE_SESSION_KEY = "ai.opencode/sessionID"
@@ -57,7 +58,10 @@ def register_tools(
     async def list_rooms() -> dict[str, Any]:
         """List all rooms with status, topic, message count and members. Call this first to find a room."""
         with _domain_errors():
-            return {"rooms": [summary_json(summary) for summary in rooms.list_rooms()]}
+            return {
+                "rooms": [summary_json(summary) for summary in rooms.list_rooms()],
+                "untrusted_notice": UNTRUSTED_NOTICE,
+            }
 
     @server.tool()
     async def create_room(slug: str, topic: str) -> dict[str, Any]:
@@ -78,6 +82,7 @@ def register_tools(
                 "room": summary_json(result.room),
                 "recent_messages": [message_json(message) for message in result.recent],
                 "protocol": result.protocol,
+                "untrusted_notice": UNTRUSTED_NOTICE,
             }
 
     @server.tool()
@@ -108,7 +113,10 @@ def register_tools(
         Your own messages are never returned. An empty list means nothing new."""
         with _domain_errors():
             messages = messaging.read(_agent(ctx), room, alias, limit)
-            return {"messages": [message_json(message) for message in messages]}
+            return {
+                "messages": [message_json(message) for message in messages],
+                "untrusted_notice": UNTRUSTED_NOTICE,
+            }
 
     @server.tool()
     async def wait(room: str, ctx: Context, timeout_s: int = 30, alias: str = "") -> dict[str, Any]:
@@ -116,6 +124,8 @@ def register_tools(
         like read. On timeout returns no messages and a hint. Use it to wait briefly for a reply; for long
         waits call listen and end your turn instead. If the hint says the room is paused or closed, stop."""
         with _domain_errors():
+            # Verified against mcp==2.3.0: in stateless JSON mode the tool context carries the original
+            # Starlette Request, so is_disconnected() sees the client socket (see test_disconnect.py).
             request = ctx.request_context.request
             result = await listening.wait(
                 _agent(ctx),
@@ -124,7 +134,11 @@ def register_tools(
                 timeout_s,
                 should_stop=request.is_disconnected if request is not None else None,
             )
-            return {"messages": [message_json(message) for message in result.messages], "hint": result.hint}
+            return {
+                "messages": [message_json(message) for message in result.messages],
+                "hint": result.hint,
+                "untrusted_notice": UNTRUSTED_NOTICE,
+            }
 
     @server.tool()
     async def listen(room: str, ctx: Context, minutes: int = 30, alias: str = "") -> dict[str, Any]:

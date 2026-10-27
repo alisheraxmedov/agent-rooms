@@ -1,3 +1,4 @@
+import hashlib
 import json
 import socket
 import threading
@@ -26,6 +27,18 @@ TOKENS = {
     "opencode": "opencode-test-token-0123456789",
     "human": "human-test-token-0123456789",
 }
+
+LEGACY_PLAIN_AGENTS = {"opencode"}  # stored as plain tokens to keep the legacy path covered
+
+
+def stored_tokens() -> dict[str, str]:
+    return {
+        agent: token
+        if agent in LEGACY_PLAIN_AGENTS
+        else "sha256:" + hashlib.sha256(token.encode()).hexdigest()
+        for agent, token in TOKENS.items()
+    }
+
 
 CallTool = Callable[..., Awaitable[dict[str, Any]]]
 CallError = Callable[..., Awaitable[str]]
@@ -66,7 +79,7 @@ def _wait_until_healthy(url: str, timeout_s: float) -> None:
 @pytest.fixture
 def live_server(tmp_path: Path) -> Iterator[LiveServer]:
     tokens_file = tmp_path / "agents.json"
-    tokens_file.write_text(json.dumps(TOKENS))
+    tokens_file.write_text(json.dumps(stored_tokens()))
     port = _free_port()
     settings = Settings(
         host="127.0.0.1",

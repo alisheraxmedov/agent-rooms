@@ -43,3 +43,16 @@ def test_page_has_room_control_buttons(page: str, button_id: str) -> None:
 @pytest.mark.parametrize("form_id", ["create-room", "post-form"])
 def test_page_has_forms(page: str, form_id: str) -> None:
     assert re.search(rf"<form\b[^>]*\bid=\"{form_id}\"", page)
+
+
+def test_closed_rooms_get_a_delete_button_that_is_hidden_otherwise(page: str) -> None:
+    assert re.search(r"<button\b[^>]*\bid=\"delete\"[^>]*\bhidden\b", page)
+    assert '$("delete").hidden = summary.status !== "closed";' in page
+    assert '$("delete").addEventListener("click", deleteRoom);' in page
+
+
+def test_delete_uses_the_room_endpoint_and_confirms_first(page: str) -> None:
+    deletion = page[page.index("async function deleteRoom") :]
+    deletion = deletion[: deletion.index("\n}\n")]
+    assert deletion.index("confirm(") < deletion.index('api("DELETE"')
+    assert "encodeURIComponent(state.room)" in deletion

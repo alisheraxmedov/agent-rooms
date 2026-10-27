@@ -13,7 +13,7 @@ from agent_rooms.application.services.listening import Listening
 from agent_rooms.application.services.membership import Membership
 from agent_rooms.application.services.messaging import Messaging
 from agent_rooms.application.services.rooms import RoomAdmin
-from agent_rooms.domain.errors import NotAMember, RoomNotActive, RoomNotFound
+from agent_rooms.domain.errors import InvalidInput, NotAMember, RoomNotActive, RoomNotFound
 from agent_rooms.domain.models import Role, RoomStatus
 from agent_rooms.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 
@@ -35,7 +35,7 @@ class TestListen:
     def test_default_is_thirty_minutes(self, listening: Listening, alpha: str, clock: FakeClock) -> None:
         assert listening.listen("claude", alpha).listening_until == clock.now() + timedelta(minutes=30)
 
-    @pytest.mark.parametrize(("minutes", "expected"), [(0, 1), (-5, 1), (61, 60), (999, 60)])
+    @pytest.mark.parametrize(("minutes", "expected"), [(0, 1), (61, 60), (999, 60)])
     def test_minutes_are_clamped(
         self, listening: Listening, alpha: str, clock: FakeClock, minutes: int, expected: int
     ) -> None:
@@ -602,3 +602,24 @@ class TestQuickReadBeforeWriteLock:
 
         assert [m.text for m in result.messages] == ["news"]
         assert counting.transactions == 1
+
+
+class TestIntegerBounds:
+    @pytest.mark.parametrize("value", [-1, 2**63])
+    def test_listen_minutes(self, listening: Listening, alpha: str, value: int) -> None:
+        with pytest.raises(InvalidInput, match="minutes"):
+            listening.listen("claude", alpha, minutes=value)
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("value", [-1, 2**63])
+    async def test_wait_and_next_for_listener_timeouts(
+        self, timed_listening: Listening, alpha: str, value: int
+    ) -> None:
+        with pytest.raises(InvalidInput, match="timeout_s"):
+            await timed_listening.wait("claude", alpha, timeout_s=value)
+        with pytest.raises(InvalidInput, match="timeout_s"):
+            await timed_listening.next_for_listener("claude", timeout_s=value)
+
+    @pytest.mark.anyio
+    async def test_zero_timeout_is_fine(self, timed_listening: Listening, alpha: str) -> None:
+        assert (await timed_listening.wait("claude", alpha, timeout_s=0)).hint == WAIT_TIMEOUT_HINT

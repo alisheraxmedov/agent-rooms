@@ -1,11 +1,9 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from importlib.resources import files
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.applications import Starlette
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agent_rooms import __version__
 from agent_rooms.application.services.listening import Listening
@@ -16,6 +14,7 @@ from agent_rooms.infrastructure.clock import SystemClock
 from agent_rooms.infrastructure.sqlite.unit_of_work import SqliteUnitOfWork
 from agent_rooms.infrastructure.token_registry import JsonFileTokenRegistry
 from agent_rooms.presentation.http.auth import BearerAuthMiddleware
+from agent_rooms.presentation.http.host_guard import HostGuardMiddleware
 from agent_rooms.presentation.http.rest import build_routes
 from agent_rooms.presentation.mcp.tools import register_tools
 from agent_rooms.settings import Settings
@@ -30,18 +29,21 @@ def _protocol_text() -> str:
     return (files("agent_rooms") / "resources" / "protocol.md").read_text(encoding="utf-8")
 
 
-def _close_on_shutdown(app: Starlette, uow: SqliteUnitOfWork) -> None:
-    inner = app.router.lifespan_context
+class CloseOnShutdown:
+    """Pure ASGI wrapper: runs `close` once the wrapped app's lifespan has ended (or failed)."""
 
-    @asynccontextmanager
-    async def lifespan(scope_app: Starlette) -> AsyncIterator[None]:
+    def __init__(self, app: ASGIApp, close: Callable[[], None]) -> None:
+        self.app = app
+        self._close = close
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "lifespan":
+            await self.app(scope, receive, send)
+            return
         try:
-            async with inner(scope_app):
-                yield
+            await self.app(scope, receive, send)
         finally:
-            uow.close()
-
-    app.router.lifespan_context = lifespan
+            self._close()
 
 
 def create_app(settings: Settings | None = None) -> ASGIApp:
@@ -49,8 +51,17 @@ def create_app(settings: Settings | None = None) -> ASGIApp:
     registry = JsonFileTokenRegistry.from_file(settings.tokens_file)
     protocol = _protocol_text()
     uow = SqliteUnitOfWork.open(settings.db_path)
-    clock, limits = SystemClock(), settings.limits
+    try:
+        return _compose(settings, registry, protocol, uow)
+    except BaseException:
+        uow.close()
+        raise
 
+
+def _compose(
+    settings: Settings, registry: JsonFileTokenRegistry, protocol: str, uow: SqliteUnitOfWork
+) -> ASGIApp:
+    clock, limits = SystemClock(), settings.limits
     rooms = RoomAdmin(uow, clock, limits)
     membership = Membership(uow, clock, limits, protocol)
     messaging = Messaging(uow, clock, limits)
@@ -59,7 +70,7 @@ def create_app(settings: Settings | None = None) -> ASGIApp:
     server = MCPServer(name="agent-rooms", instructions=INSTRUCTIONS, version=__version__)
     register_tools(server, rooms=rooms, membership=membership, messaging=messaging, listening=listening)
     for route in build_routes(rooms=rooms, messaging=messaging, listening=listening, limits=limits):
-        server.custom_route(route.path, methods=sorted((route.methods or set()) - {"HEAD"}))(route.endpoint)
+        server.custom_route(route.path, methods=list(route.methods))(route.endpoint)
 
     app = server.streamable_http_app(
         streamable_http_path="/mcp",
@@ -71,5 +82,5 @@ def create_app(settings: Settings | None = None) -> ASGIApp:
             allowed_origins=[f"http://{host}" for host in settings.allowed_hosts],
         ),
     )
-    _close_on_shutdown(app, uow)
-    return BearerAuthMiddleware(app, registry)
+    guarded = HostGuardMiddleware(BearerAuthMiddleware(app, registry), settings.allowed_hosts)
+    return CloseOnShutdown(guarded, uow.close)

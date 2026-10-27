@@ -18,7 +18,7 @@ from agent_rooms.application.ports import Clock, UnitOfWork
 from agent_rooms.application.prompts import build_wake_prompt
 from agent_rooms.application.services._lookup import require_member, require_room
 from agent_rooms.domain.errors import RoomNotActive
-from agent_rooms.domain.models import Member, Message, RoomStatus
+from agent_rooms.domain.models import Member, Message, RoomStatus, validate_int
 
 
 class Listening:
@@ -42,6 +42,7 @@ class Listening:
     def listen(
         self, agent: str, room: str, alias: str = "", minutes: int = 30, session: str | None = None
     ) -> ListenAck:
+        validate_int("minutes", minutes)
         found = require_room(self._uow, room)
         require_member(self._uow, room, agent, alias)
         if found.status is not RoomStatus.ACTIVE:
@@ -58,6 +59,7 @@ class Listening:
         timeout_s: int = 30,
         should_stop: Callable[[], Awaitable[bool]] | None = None,
     ) -> WaitResult:
+        validate_int("timeout_s", timeout_s)
         require_room(self._uow, room)
         require_member(self._uow, room, agent, alias)
 
@@ -83,6 +85,8 @@ class Listening:
         session: str | None = None,
         should_stop: Callable[[], Awaitable[bool]] | None = None,
     ) -> Wake | NoWake:
+        validate_int("timeout_s", timeout_s)
+
         def check() -> Wake | NoWake | None:
             candidates = self._uow.members.listening(agent, self._clock.now(), alias=alias, session=session)
             if not candidates:

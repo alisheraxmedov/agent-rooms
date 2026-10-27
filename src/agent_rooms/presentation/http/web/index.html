@@ -260,6 +260,7 @@ dialog .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
           <button id="pause" class="btn" type="button">Pause</button>
           <button id="resume" class="btn" type="button">Resume</button>
           <button id="close" class="btn danger" type="button">Close</button>
+          <button id="delete" class="btn danger" type="button" hidden>Delete</button>
         </div>
         <p id="control-error" class="form-error control-error" role="alert"></p>
       </section>
@@ -320,6 +321,7 @@ dialog .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 const POLL_INTERVAL_MS = 2000;
 const PAGE_LIMIT = 200;
 const NEAR_BOTTOM_PX = 80;
+// The human token stays in localStorage on purpose (design spec 11a, SEC-07); the CSP only allows this page's own blocks.
 const TOKEN_KEY = "agentRooms.humanToken";
 const KNOWN_KINDS = new Set(["chat", "task", "review_request", "changes_requested", "approved", "done", "system"]);
 const KNOWN_STATUSES = new Set(["active", "paused", "closed"]);
@@ -483,6 +485,7 @@ function renderRoomHeader() {
   $("pause").disabled = summary.status !== "active";
   $("resume").disabled = summary.status !== "paused";
   $("close").disabled = summary.status === "closed";
+  $("delete").hidden = summary.status !== "closed";
 }
 
 function renderMembers() {
@@ -665,6 +668,26 @@ async function setStatus(status) {
   }
 }
 
+async function deleteRoom() {
+  if (!state.room) return;
+  const slug = state.room;
+  if (!confirm("Delete room '" + slug + "' with all its messages? This cannot be undone.")) return;
+  $("control-error").textContent = "";
+  try {
+    await api("DELETE", "/api/rooms/" + encodeURIComponent(state.room));
+    state.rooms = state.rooms.filter((room) => room.slug !== slug);
+    state.room = null;
+    state.summary = null;
+    resetThread("Select a room, or create one, to watch the conversation.");
+    renderRooms();
+    renderRoomHeader();
+    renderMembers();
+    schedule(0);
+  } catch (err) {
+    if (err instanceof ApiError && err.status !== 401) $("control-error").textContent = err.message;
+  }
+}
+
 async function createRoom(event) {
   event.preventDefault();
   const slug = $("new-slug").value.trim();
@@ -728,6 +751,7 @@ function bindEvents() {
   $("pause").addEventListener("click", () => setStatus("paused"));
   $("resume").addEventListener("click", () => setStatus("active"));
   $("close").addEventListener("click", () => setStatus("closed"));
+  $("delete").addEventListener("click", deleteRoom);
   $("jump").addEventListener("click", () => {
     scrollToBottom();
     $("thread").focus();

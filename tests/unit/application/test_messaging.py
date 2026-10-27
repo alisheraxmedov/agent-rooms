@@ -401,3 +401,33 @@ class TestHistory:
     def test_unknown_room(self, messaging: Messaging) -> None:
         with pytest.raises(RoomNotFound):
             messaging.history("ghost")
+
+
+class TestIntegerBounds:
+    @pytest.mark.parametrize("value", [-1, 2**53 + 1, 2**63, 10**30])
+    def test_reply_to_out_of_range_is_invalid_input(
+        self, messaging: Messaging, alpha: str, value: int
+    ) -> None:
+        with pytest.raises(InvalidInput, match="reply_to"):
+            messaging.post("claude", alpha, "hi", reply_to=value)
+
+    @pytest.mark.parametrize("value", [-1, 2**63])
+    def test_read_limit_out_of_range_is_invalid_input(
+        self, messaging: Messaging, alpha: str, value: int
+    ) -> None:
+        with pytest.raises(InvalidInput, match="limit"):
+            messaging.read("claude", alpha, limit=value)
+
+    @pytest.mark.parametrize("value", [-1, 2**63])
+    def test_history_bounds(self, messaging: Messaging, alpha: str, value: int) -> None:
+        with pytest.raises(InvalidInput, match="after"):
+            messaging.history(alpha, after_id=value)
+        with pytest.raises(InvalidInput, match="limit"):
+            messaging.history(alpha, limit=value)
+
+    def test_zero_and_huge_but_valid_values_are_clamped_not_rejected(
+        self, messaging: Messaging, alpha: str
+    ) -> None:
+        assert messaging.read("claude", alpha, limit=0) == []
+        assert messaging.read("claude", alpha, limit=2**53) == []
+        assert messaging.history(alpha, after_id=2**53, limit=2**53) == []

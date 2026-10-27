@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import logging
 from pathlib import Path
@@ -8,6 +10,10 @@ from agent_rooms.infrastructure.token_registry import JsonFileTokenRegistry
 
 CLAUDE = "claude-token-abcdefghijklmnopqrstuvwxyz"
 HUMAN = "human-token-abcdefghijklmnopqrstuvwxyz0"
+
+
+def hashed(token: str) -> str:
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def write(tmp_path: Path, content: object) -> Path:
@@ -76,7 +82,78 @@ def test_warns_when_human_is_missing(tmp_path: Path, caplog: pytest.LogCaptureFi
     assert CLAUDE not in caplog.text
 
 
-def test_no_warning_when_human_present(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_no_warning_when_human_present_and_every_entry_is_hashed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     with caplog.at_level(logging.WARNING):
-        JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": CLAUDE, "human": HUMAN}))
+        JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": hashed(CLAUDE), "human": hashed(HUMAN)}))
     assert caplog.text == ""
+
+
+def test_hashed_entries_authenticate_the_plain_token(tmp_path: Path) -> None:
+    registry = JsonFileTokenRegistry.from_file(
+        write(tmp_path, {"claude": hashed(CLAUDE), "human": hashed(HUMAN)})
+    )
+    assert registry.agent_for(CLAUDE) == "claude"
+    assert registry.agent_for(HUMAN) == "human"
+    assert registry.agent_for(hashed(CLAUDE)) is None
+    assert registry.agent_for(hashlib.sha256(CLAUDE.encode()).hexdigest()) is None
+    assert registry.agent_for("x" * 30) is None
+
+
+def test_hashed_and_legacy_entries_can_be_mixed(tmp_path: Path) -> None:
+    registry = JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": CLAUDE, "human": hashed(HUMAN)}))
+    assert registry.agent_for(CLAUDE) == "claude"
+    assert registry.agent_for(HUMAN) == "human"
+
+
+def test_legacy_plain_entries_warn_naming_the_agent_never_the_token(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": CLAUDE, "human": hashed(HUMAN)}))
+    assert "claude" in caplog.text
+    assert CLAUDE not in caplog.text
+    assert "human" not in caplog.text.replace("sha256", "")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sha256:",
+        "sha256:abc",
+        "sha256:" + "A" * 64,
+        "sha256:" + "g" * 64,
+        "sha256:" + "a" * 65,
+        "SHA256:" + "a" * 64,
+    ],
+)
+def test_rejects_malformed_hash_entries(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ValueError, match="sha256") as excinfo:
+        JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": value}))
+    payload = value.split(":", 1)[1]
+    assert not payload or payload not in str(excinfo.value)
+
+
+def test_rejects_the_same_token_in_hashed_and_plain_form_without_leaking(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="share the same token") as excinfo:
+        JsonFileTokenRegistry.from_file(write(tmp_path, {"claude": CLAUDE, "codex": hashed(CLAUDE)}))
+    assert CLAUDE not in str(excinfo.value)
+
+
+def test_lookup_compares_against_every_entry_in_constant_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = JsonFileTokenRegistry.from_file(
+        write(tmp_path, {"claude": hashed(CLAUDE), "human": hashed(HUMAN), "codex": hashed("c" * 30)})
+    )
+    seen: list[bytes] = []
+    real = hmac.compare_digest
+
+    def spy(left: bytes, right: bytes) -> bool:
+        seen.append(right)
+        return real(left, right)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    assert registry.agent_for(CLAUDE) == "claude"
+    assert len(seen) == 3

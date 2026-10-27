@@ -12,6 +12,7 @@ from agent_rooms.domain.models import (
     Room,
     RoomStatus,
     validate_alias,
+    validate_int,
     validate_text,
 )
 from agent_rooms.domain.policies import (
@@ -39,17 +40,19 @@ class Messaging:
         alias: str = "",
     ) -> PostResult:
         validate_alias(alias)
-        found = require_room(self._uow, room)
-        member = require_member(self._uow, room, agent, alias)
-        if found.status is not RoomStatus.ACTIVE:
-            raise RoomNotActive(
-                f"Room '{room}' is {found.status}; it does not accept posts. Stop and let the human decide."
-            )
-        ensure_kind_allowed(member.role, kind)
-        validate_text(text, self._limits.max_text_length)
-        self._ensure_reply_target(room, reply_to)
-
+        if reply_to is not None:
+            validate_int("reply_to", reply_to)
         with self._uow.transaction():
+            found = require_room(self._uow, room)
+            member = require_member(self._uow, room, agent, alias)
+            if found.status is not RoomStatus.ACTIVE:
+                raise RoomNotActive(
+                    f"Room '{room}' is {found.status}; it does not accept posts. "
+                    "Stop and let the human decide."
+                )
+            ensure_kind_allowed(member.role, kind)
+            validate_text(text, self._limits.max_text_length)
+            self._ensure_reply_target(room, reply_to)
             cap_trip = message_cap_trip(
                 self._uow.messages.count_agent_posts_since(room, found.budget_start_id), found.max_messages
             )
@@ -59,14 +62,16 @@ class Messaging:
         raise GuardTripped(cap_trip.notice)
 
     def post_as_human(self, room: str, text: str, kind: MessageKind = MessageKind.CHAT) -> Message:
-        found = require_room(self._uow, room)
-        if found.status is RoomStatus.CLOSED:
-            raise RoomNotActive(f"Room '{room}' is closed; it does not accept posts.")
-        ensure_human_kind(kind)
-        validate_text(text, self._limits.max_text_length)
-        return self._add(room, HUMAN, kind, text)
+        with self._uow.transaction():
+            found = require_room(self._uow, room)
+            if found.status is RoomStatus.CLOSED:
+                raise RoomNotActive(f"Room '{room}' is closed; it does not accept posts.")
+            ensure_human_kind(kind)
+            validate_text(text, self._limits.max_text_length)
+            return self._add(room, HUMAN, kind, text)
 
     def read(self, agent: str, room: str, alias: str = "", limit: int = 50) -> list[Message]:
+        validate_int("limit", limit)
         require_room(self._uow, room)
         with self._uow.transaction():
             member = require_member(self._uow, room, agent, alias)
@@ -76,6 +81,8 @@ class Messaging:
         return messages
 
     def history(self, room: str, after_id: int = 0, limit: int = 200) -> list[Message]:
+        validate_int("after", after_id)
+        validate_int("limit", limit)
         require_room(self._uow, room)
         return self._uow.messages.after(room, after_id, clamp(limit, 1, self._limits.history_max))
 

@@ -142,6 +142,20 @@ async def test_messages_rejects_bad_query_params(rest: Any, params: dict[str, An
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "params",
+    [{"after": 99999999999999999999}, {"after": 2**53 + 1}, {"limit": 99999999999999999999}, {"limit": -1}],
+)
+async def test_messages_rejects_out_of_range_integers_as_400_not_500(
+    rest: Any, params: dict[str, Any]
+) -> None:
+    await make_room(rest)
+    response = await rest("human", "GET", "/api/rooms/r1/messages", params=params)
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_input"
+
+
+@pytest.mark.anyio
 async def test_messages_of_unknown_room_is_404(rest: Any) -> None:
     response = await rest("human", "GET", "/api/rooms/nope/messages")
     assert response.status_code == 404
@@ -265,6 +279,51 @@ async def test_status_of_unknown_room_is_404(rest: Any) -> None:
 async def test_unknown_path_and_wrong_method(rest: Any) -> None:
     assert (await rest("human", "GET", "/api/rooms/r1/unknown")).status_code == 404
     assert (await rest("human", "DELETE", "/api/rooms")).status_code == 405
+
+
+@pytest.mark.anyio
+async def test_delete_removes_a_closed_room_with_its_members_and_messages(rest: Any, call: Any) -> None:
+    await make_room(rest)
+    await call("claude", "join_room", room="r1", role="writer")
+    await rest("human", "POST", "/api/rooms/r1/messages", json={"text": "hello"})
+    await rest("human", "POST", "/api/rooms/r1/status", json={"status": "closed"})
+
+    response = await rest("human", "DELETE", "/api/rooms/r1")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert (await rest("human", "GET", "/api/rooms")).json() == []
+    assert (await rest("human", "GET", "/api/rooms/r1/messages")).status_code == 404
+    await make_room(rest)
+    assert (await rest("human", "GET", "/api/rooms/r1/messages")).json()["messages"] == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["active", "paused"])
+async def test_delete_of_a_room_that_is_not_closed_is_409(rest: Any, status: str) -> None:
+    await make_room(rest)
+    await rest("human", "POST", "/api/rooms/r1/status", json={"status": status})
+    response = await rest("human", "DELETE", "/api/rooms/r1")
+    assert response.status_code == 409
+    assert response.json()["error"] == "room_not_closed"
+    assert "Close the room first" in response.json()["message"]
+    assert len((await rest("human", "GET", "/api/rooms")).json()) == 1
+
+
+@pytest.mark.anyio
+async def test_delete_of_an_unknown_room_is_404(rest: Any) -> None:
+    response = await rest("human", "DELETE", "/api/rooms/nope")
+    assert response.status_code == 404
+    assert response.json()["error"] == "room_not_found"
+
+
+@pytest.mark.anyio
+async def test_agents_cannot_delete_rooms(rest: Any) -> None:
+    await make_room(rest)
+    await rest("human", "POST", "/api/rooms/r1/status", json={"status": "closed"})
+    assert (await rest("claude", "DELETE", "/api/rooms/r1")).status_code == 403
+    assert (await rest(None, "DELETE", "/api/rooms/r1")).status_code == 401
+    assert len((await rest("human", "GET", "/api/rooms")).json()) == 1
 
 
 @pytest.mark.anyio

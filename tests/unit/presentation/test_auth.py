@@ -5,7 +5,8 @@ from typing import Any
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
-from agent_rooms.presentation.http.auth import BearerAuthMiddleware, agent_of
+from agent_rooms.presentation.http.auth import BearerAuthMiddleware
+from agent_rooms.presentation.identity import agent_of
 
 TOKENS = {
     "claude-token-0123456789-abcdef": "claude",
@@ -133,7 +134,7 @@ async def test_agent_is_forbidden_on_admin_rest(path: str) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("path", ["/api/listen/next", "/mcp", "/mcp/"])
+@pytest.mark.parametrize("path", ["/api/listen/next", "/mcp"])
 async def test_human_is_forbidden_on_agent_endpoints(path: str) -> None:
     recorder = await call(path, token="human-token-0123456789-abcdef")
     assert recorder.status == 403
@@ -186,3 +187,72 @@ def test_agent_of_reads_scope_and_request_like_objects() -> None:
     scope = {"state": {"agent": "codex"}}
     assert agent_of(scope) == "codex"
     assert agent_of(SimpleNamespace(scope=scope)) == "codex"
+
+
+HUMAN_TOKEN = "human-token-0123456789-abcdef"
+CLAUDE_TOKEN = "claude-token-0123456789-abcdef"
+NOT_FOUND = {"error": "not_found", "message": "No such endpoint."}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "path",
+    ["/nope", "/docs", "/api", "/api/", "/api/rooms/", "/api/rooms/r1/unknown", "/api/rooms/a/b/c",
+     "/api/listen", "/api/listen/", "/api/listen/other", "/mcp/", "/mcp/x", "//api/rooms", "/API/rooms",
+     "/healthz/", "//"],
+)  # fmt: skip
+@pytest.mark.parametrize("token", [HUMAN_TOKEN, CLAUDE_TOKEN])
+async def test_paths_outside_the_allow_list_are_404_for_any_authenticated_identity(
+    path: str, token: str
+) -> None:
+    recorder = await call(path, token=token)
+    assert recorder.status == 404
+    assert json.loads(recorder.body) == NOT_FOUND
+    assert recorder.scopes == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", ["/nope", "/api/rooms/r1/unknown", "/mcp/x"])
+async def test_paths_outside_the_allow_list_are_401_without_a_token(path: str) -> None:
+    recorder = await call(path)
+    assert recorder.status == 401
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/rooms"),
+        ("POST", "/api/rooms"),
+        ("GET", "/api/rooms/r1/messages"),
+        ("POST", "/api/rooms/r1/messages"),
+        ("POST", "/api/rooms/r1/status"),
+        ("DELETE", "/api/rooms/r1"),
+    ],
+)
+async def test_every_admin_route_is_human_only(method: str, path: str) -> None:
+    assert (await call(path, method=method, token=HUMAN_TOKEN)).status == 200
+    assert (await call(path, method=method, token=CLAUDE_TOKEN)).status == 403
+    assert (await call(path, method=method)).status == 401
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", ["/", "/healthz"])
+async def test_authenticated_callers_reach_the_public_pages_with_any_method(path: str) -> None:
+    assert (await call(path, method="POST", token=CLAUDE_TOKEN)).status == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scope_type", ["websocket", "something-else"])
+async def test_only_lifespan_and_http_scopes_reach_the_app(scope_type: str) -> None:
+    recorder = Recorder()
+    middleware = BearerAuthMiddleware(recorder.app, FakeRegistry())
+    scope: dict[str, Any] = {
+        "type": scope_type,
+        "path": "/mcp",
+        "headers": [(b"authorization", f"Bearer {CLAUDE_TOKEN}".encode())],
+    }
+    await middleware(scope, receive, recorder.send)
+    assert recorder.scopes == []
+    if scope_type == "websocket":
+        assert [m["type"] for m in recorder.sent] == ["websocket.close"]
