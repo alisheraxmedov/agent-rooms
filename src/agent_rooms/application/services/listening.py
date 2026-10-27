@@ -51,12 +51,13 @@ class Listening:
         require_member(self._uow, room, agent, alias)
 
         def check() -> WaitResult | None:
-            current = require_room(self._uow, room)
-            member = require_member(self._uow, room, agent, alias)
-            unread = self._uow.messages.unread_for(member, self._limits.read_max)
-            if unread:
-                self._uow.members.advance_cursor(room, agent, alias, unread[-1].id)
-                return WaitResult(tuple(unread), None)
+            with self._uow.transaction():
+                current = require_room(self._uow, room)
+                member = require_member(self._uow, room, agent, alias)
+                unread = self._uow.messages.unread_for(member, self._limits.read_max)
+                if unread:
+                    self._uow.members.advance_cursor(room, agent, alias, unread[-1].id)
+                    return WaitResult(tuple(unread), None)
             if current.status is not RoomStatus.ACTIVE:
                 return WaitResult((), f"Room '{room}' is {current.status}. Stop waiting.")
             return None
@@ -82,14 +83,17 @@ class Listening:
         )
         return NoWake("timeout") if result is None else result
 
-    def _wake_if_unread(self, member: Member) -> Wake | None:
-        unread = self._uow.messages.unread_for(member, self._limits.read_max)
-        if not unread:
-            return None
+    def _wake_if_unread(self, candidate: Member) -> Wake | None:
         with self._uow.transaction():
+            member = self._uow.members.get(candidate.room, candidate.agent, candidate.alias)
+            if member is None or not member.is_listening(self._clock.now()):
+                return None
+            unread = self._uow.messages.unread_for(member, self._limits.read_max)
+            if not unread:
+                return None
             self._uow.members.advance_cursor(member.room, member.agent, member.alias, unread[-1].id)
             self._uow.members.set_listening(member.room, member.agent, member.alias, None, None)
-        room = require_room(self._uow, member.room)
+            room = require_room(self._uow, member.room)
         return Wake(member.room, member.alias, tuple(unread), build_wake_prompt(room, member, unread))
 
     async def _poll[T](self, check: Callable[[], T | None], timeout_s: int) -> T | None:

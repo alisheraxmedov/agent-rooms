@@ -68,10 +68,11 @@ class Messaging:
 
     def read(self, agent: str, room: str, alias: str = "", limit: int = 50) -> list[Message]:
         require_room(self._uow, room)
-        member = require_member(self._uow, room, agent, alias)
-        messages = self._uow.messages.unread_for(member, clamp(limit, 1, self._limits.read_max))
-        if messages:
-            self._uow.members.advance_cursor(room, agent, alias, messages[-1].id)
+        with self._uow.transaction():
+            member = require_member(self._uow, room, agent, alias)
+            messages = self._uow.messages.unread_for(member, clamp(limit, 1, self._limits.read_max))
+            if messages:
+                self._uow.members.advance_cursor(room, agent, alias, messages[-1].id)
         return messages
 
     def history(self, room: str, after_id: int = 0, limit: int = 200) -> list[Message]:
