@@ -1,0 +1,119 @@
+Screen {
+    layout: vertical;
+    background: $background;
+}
+
+#topbar {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+#title {
+    width: 1fr;
+}
+#conn {
+    width: auto;
+}
+
+#body {
+    height: 1fr;
+}
+#rooms-pane {
+    width: 30;
+    padding: 0 1;
+    border-right: solid $panel-lighten-1;
+}
+#members-pane {
+    width: 32;
+    padding: 0 1;
+    border-left: solid $panel-lighten-1;
+}
+.pane-title {
+    height: 1;
+    margin: 1 0 1 0;
+    color: $text-muted;
+    text-style: bold;
+}
+#main {
+    width: 1fr;
+}
+#room-header {
+    height: auto;
+    max-height: 4;
+    padding: 1 2 1 2;
+    border-bottom: solid $panel-lighten-1;
+}
+
+#thread-pane {
+    height: 1fr;
+}
+#thread {
+    height: 1fr;
+    padding: 1 2 0 2;
+    scrollbar-size-vertical: 1;
+}
+#placeholder {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    text-align: center;
+    padding: 2 0;
+}
+MessageView {
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    border-left: tall $panel-lighten-2;
+}
+MessageView.kind-task { border-left: tall $accent; }
+MessageView.kind-review_request { border-left: tall $secondary; }
+MessageView.kind-changes_requested { border-left: tall $warning; }
+MessageView.kind-approved { border-left: tall $success; }
+MessageView.kind-done { border-left: tall $primary; }
+MessageView.kind-system { border-left: tall $panel-lighten-1; color: $text-muted; }
+#new-indicator {
+    dock: bottom;
+    width: auto;
+    height: 1;
+    margin: 0 2 0 0;
+    padding: 0 1;
+    offset-x: 0;
+    background: $primary;
+    color: $text;
+    text-style: bold;
+}
+
+#status {
+    height: 1;
+    padding: 0 2;
+    color: $text-muted;
+}
+#status.info { color: $text; }
+#status.ok { color: $success; }
+#status.error { color: $error; }
+
+#composer {
+    height: 3;
+    padding: 0 1;
+    border: round $primary;
+}
+#composer.login { border: round $warning; }
+#composer.confirm { border: round $error; }
+#prompt {
+    width: 2;
+    color: $primary;
+    text-style: bold;
+}
+CommandInput {
+    height: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+CommandInput:focus {
+    border: none;
+    background: transparent;
+}
+
+Screen.-narrow #members-pane { display: none; }
+Screen.-tiny #rooms-pane { display: none; }

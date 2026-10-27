@@ -127,3 +127,50 @@ def test_relative_imports_are_resolved_against_the_importing_package() -> None:
     assert _resolve_relative(package, 2, "ports") == "agent_rooms.application.ports"
     assert _resolve_relative(package, 3, "infrastructure") == "agent_rooms.infrastructure"
     assert _resolve_relative(package, 2, None) == "agent_rooms.application"
+
+
+TUI = f"{PACKAGE}.tui"
+TUI_THIRD_PARTY = ("textual", "keyring", "httpx2", "rich")
+SERVER_MODULES = (
+    *(f"{PACKAGE}.{layer}" for layer in LAYERS),
+    f"{PACKAGE}.bootstrap",
+    f"{PACKAGE}.settings",
+    f"{PACKAGE}.__main__",
+)
+
+
+def test_the_terminal_client_package_exists() -> None:
+    assert (SRC / PACKAGE / "tui" / "__init__.py").is_file()
+
+
+def test_tui_imports_nothing_from_the_server_side() -> None:
+    assert _forbidden("tui", SERVER_MODULES) == []
+
+
+def test_tui_depends_only_on_the_stdlib_its_own_package_and_the_client_libraries() -> None:
+    allowed = (TUI, *TUI_THIRD_PARTY)
+    assert _violations("tui", allowed) == []
+
+
+def test_nothing_outside_tui_imports_it() -> None:
+    tui = SRC / PACKAGE / "tui"
+    found = [
+        f"{path.relative_to(SRC)} imports {imported}"
+        for path in sorted((SRC / PACKAGE).rglob("*.py"))
+        if tui not in path.parents
+        for imported in sorted(_absolute_imports(path))
+        if _is_under(imported, TUI)
+    ]
+    assert found == []
+
+
+def test_the_server_never_needs_the_optional_client_libraries() -> None:
+    forbidden = ("textual", "keyring")
+    found = [
+        f"{path.relative_to(SRC)} imports {imported}"
+        for path in sorted((SRC / PACKAGE).rglob("*.py"))
+        if (SRC / PACKAGE / "tui") not in path.parents
+        for imported in sorted(_absolute_imports(path))
+        if any(_is_under(imported, name) for name in forbidden)
+    ]
+    assert found == []
