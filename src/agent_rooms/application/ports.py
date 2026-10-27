@@ -58,8 +58,11 @@ class MessageRepository(Protocol):
 
 
 class UnitOfWork(Protocol):
-    rooms: RoomRepository
-    members: MemberRepository
-    messages: MessageRepository
+    @property
+    def rooms(self) -> RoomRepository: ...
+    @property
+    def members(self) -> MemberRepository: ...
+    @property
+    def messages(self) -> MessageRepository: ...
 
     def transaction(self) -> AbstractContextManager[None]: ...
