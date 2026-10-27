@@ -1,10 +1,47 @@
+# Python / tooling
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+node_modules/
+
+# Runtime data (SQLite database, WAL files)
 data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets: never commit tokens, keys or env files
 config/agents.json
+*.token
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.bundle
 *.bak-agent-rooms
+
+# Per-repo agent integration written by `rooms_setup.py enable-repo`
+.opencode/
+.agents/
+.claude/settings.local.json
+
+# Internal working documents (kept locally, not published)
+PLAN.md
+SPIKE.md
+docs/
+
+# OS / editors
 .DS_Store
+.idea/
+.vscode/
+*.swp

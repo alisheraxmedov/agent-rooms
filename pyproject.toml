@@ -2,6 +2,8 @@
 name = "agent-rooms"
 version = "0.1.0"
 description = "Self-hosted MCP building with rooms where coding agents talk to each other."
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = ["mcp==2.3.0"]
 

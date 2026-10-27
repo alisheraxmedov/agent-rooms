@@ -165,7 +165,7 @@ Notes:
 - Start the reviewer first so it is listening when the first `review_request` arrives.
 - Headless runs also work: `opencode run --agent rooms-reviewer "<prompt>"`, `codex-rooms exec "<prompt>"`, `agy -p "<prompt>"`.
 
-End-to-end evidence: [OpenCode as reviewer](docs/evidence/e2e-opencode.md), [Codex as reviewer](docs/evidence/e2e-codex.md).
+The full loop has been verified end to end with Claude as writer and OpenCode or Codex as reviewer, and with Codex as writer through a changes-requested round.
 
 ### Watching and controlling a room
 
@@ -265,7 +265,7 @@ The exact config snippets that `rooms_setup.py` writes are in [integrations/snip
 - The web UI renders room text with `textContent` and ships a strict CSP.
 - The hooks run from read-only copies in `~/.config/agent-rooms/bin/`, outside the repos agents edit.
 
-Residual risks (from [the security review](docs/reviews/security-review.md)):
+Residual risks (from the security review):
 
 - Agents run as your user and can read every token file, including the other agents'. Agent identities are a labeling aid, not a boundary against a hostile process running as you. The human token is the exception: it is not on disk.
 - A prompt-injected agent can still put any text in front of the other members. What happens next depends on the victim's own permissions: OpenCode allows shell by default, and Claude and Codex act within the mode you run them in.
@@ -293,7 +293,7 @@ Residual risks (from [the security review](docs/reviews/security-review.md)):
 | Two sessions of one tool fight over messages | They share one token and no alias. Start the second with its own `ROOMS_ALIAS`. |
 | Updated this repo and hooks look stale | `status` shows `stale` for a hook copy. Re-run `install` (and `enable-repo`). |
 | `timeout: command not found` in a script | macOS has no `timeout`. Use `perl -e 'alarm N; exec @ARGV' <command>`. |
-| Codex as writer cannot commit (`.git/index.lock: Operation not permitted`) | Codex's `workspace-write` sandbox keeps `.git` read-only. The writer then sends `git diff --stat` instead of a SHA, which the protocol allows (verified in `docs/evidence/e2e-fixloop.md`). Commit afterwards yourself, or use Claude as the writer. |
+| Codex as writer cannot commit (`.git/index.lock: Operation not permitted`) | Codex's `workspace-write` sandbox keeps `.git` read-only. The writer then sends `git diff --stat` instead of a SHA, which the protocol allows. Commit afterwards yourself, or use Claude as the writer. |
 | `claude-rooms` exits with "You've hit your session limit" | Your Claude subscription quota is used up. It is not a rooms problem. Wait for the reset time shown, or use Codex or OpenCode as the writer meanwhile. |
 
 ## Uninstall
@@ -346,10 +346,5 @@ Dependency rule, enforced by `tests/unit/test_architecture.py`: `domain` imports
 
 ### Documents
 
-- [PLAN.md](PLAN.md): product goal and original plan (Uzbek summary at the top).
-- [Design spec](docs/superpowers/specs/2026-10-27-agent-rooms-design.md): where it differs from `PLAN.md`, the spec wins. Section 11a lists the review-driven amendments.
-- [Implementation plan](docs/superpowers/plans/2026-10-27-agent-rooms.md)
-- [SPIKE.md](SPIKE.md): Phase 0 results table; evidence per agent in [docs/evidence/](docs/evidence/) (`spike-*.md`, `e2e-opencode.md`, `e2e-codex.md`).
-- [Phase 0a research](docs/research/): MCP SDK, Claude and Codex, OpenCode and agy.
-- Reviews: [code review](docs/reviews/code-review.md), [security review](docs/reviews/security-review.md).
 - [integrations/snippets.md](integrations/snippets.md): the exact config each agent gets.
+- `src/agent_rooms/resources/protocol.md`: the rules every agent receives when it joins a room.

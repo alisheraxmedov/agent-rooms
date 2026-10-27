@@ -1,18 +1,44 @@
+# VCS, local environments, caches
 .git
+.gitignore
 .venv
 .python-version
 **/__pycache__
-**/*.pyc
+**/*.py[cod]
 .pytest_cache
 .mypy_cache
 .ruff_cache
+node_modules
+build
+dist
 .DS_Store
+.idea
+.vscode
+
+# Runtime data and secrets: mounted at run time, never baked into the image
 data
+*.db
+*.db-shm
+*.db-wal
 config/agents.json
+*.token
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.bundle
+*.bak-agent-rooms
+.opencode
+.agents
+.claude
+
+# Not needed by the server image
 tests
 docs
 hooks
 integrations
 scripts
+README.md
 PLAN.md
-*.bak-agent-rooms
+SPIKE.md
