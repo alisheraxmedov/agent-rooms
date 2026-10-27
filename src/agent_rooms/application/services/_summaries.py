@@ -1,12 +1,13 @@
 from agent_rooms.application.dto import MemberView, RoomSummary
 from agent_rooms.application.ports import Clock, UnitOfWork
-from agent_rooms.domain.models import Room
+from agent_rooms.domain.models import Room, RoomStatus
 
 
 def summarize(uow: UnitOfWork, clock: Clock, room: Room) -> RoomSummary:
     now = clock.now()
+    active = room.status is RoomStatus.ACTIVE
     members = tuple(
-        MemberView(m.agent, m.alias, m.role, m.is_listening(now))
+        MemberView(m.agent, m.alias, m.role, active and m.is_listening(now))
         for m in uow.members.list_for_room(room.slug)
     )
     return RoomSummary(

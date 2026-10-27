@@ -2,10 +2,10 @@ from agent_rooms.application.dto import PostResult
 from agent_rooms.application.limits import Limits, clamp
 from agent_rooms.application.ports import Clock, UnitOfWork
 from agent_rooms.application.services._lookup import require_member, require_room
+from agent_rooms.application.services._transitions import change_room_status
 from agent_rooms.domain.errors import GuardTripped, InvalidInput, RoomNotActive
 from agent_rooms.domain.models import (
     HUMAN,
-    SYSTEM,
     Member,
     Message,
     MessageKind,
@@ -108,8 +108,7 @@ class Messaging:
         return PostResult(message, trip.status, trip.notice)
 
     def _apply_trip(self, room: str, trip: GuardTrip) -> None:
-        self._uow.rooms.set_status(room, trip.status)
-        self._add(room, SYSTEM, MessageKind.SYSTEM, trip.notice)
+        change_room_status(self._uow, self._clock, room, trip.status, trip.notice)
 
     def _add(
         self,

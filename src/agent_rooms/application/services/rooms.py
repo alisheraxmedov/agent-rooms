@@ -3,8 +3,9 @@ from agent_rooms.application.limits import Limits
 from agent_rooms.application.ports import Clock, UnitOfWork
 from agent_rooms.application.services._lookup import require_room
 from agent_rooms.application.services._summaries import summarize
+from agent_rooms.application.services._transitions import change_room_status
 from agent_rooms.domain.errors import RoomNotClosed
-from agent_rooms.domain.models import SYSTEM, MessageKind, Room, RoomStatus, validate_slug, validate_topic
+from agent_rooms.domain.models import Room, RoomStatus, validate_slug, validate_topic
 from agent_rooms.domain.policies import status_change_notice
 
 
@@ -39,18 +40,7 @@ class RoomAdmin:
                 return summarize(self._uow, self._clock, room)
             if status is RoomStatus.ACTIVE:
                 self._uow.rooms.reset_budget(slug, self._uow.messages.latest_id(slug))
-            else:
-                self._uow.members.clear_listening_in_room(slug)
-            self._uow.rooms.set_status(slug, status)
-            self._uow.messages.add(
-                room=slug,
-                sender=SYSTEM,
-                alias="",
-                kind=MessageKind.SYSTEM,
-                text=status_change_notice(status),
-                reply_to=None,
-                created_at=self._clock.now(),
-            )
+            change_room_status(self._uow, self._clock, slug, status, status_change_notice(status))
         return self.get_summary(slug)
 
     def delete_room(self, slug: str) -> None:
