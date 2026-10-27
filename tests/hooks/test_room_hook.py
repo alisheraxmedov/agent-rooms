@@ -215,3 +215,11 @@ def test_invalid_arguments_never_exit_nonzero():
     result = run_hook("--format", "bogus")
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_instant_timeouts_are_paced(stub, token_file):
+    stub.default = TIMEOUT
+    result = run_against(stub, token_file, "claude", "--max-wait", "7")
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert 2 <= len(stub.requests) <= 4

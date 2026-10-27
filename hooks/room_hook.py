@@ -17,6 +17,7 @@ DEFAULT_MAX_WAIT = 3540
 LONG_POLL_MAX = 540
 RESERVE = 5
 SOCKET_SLACK = 15
+MIN_POLL_SECONDS = 1
 
 MESSAGE = "message"
 TIMEOUT = "timeout"
@@ -78,11 +79,14 @@ def wait_for_message(args: argparse.Namespace, token: str) -> str | None:
         poll = int(min(LONG_POLL_MAX, deadline - time.monotonic() - RESERVE + 0.5))
         if poll < 1:
             return None
+        started = time.monotonic()
         state, prompt = fetch_next(args.url, token, args.alias, poll)
         if state == MESSAGE:
             return prompt
         if state == STOP:
             return None
+        if time.monotonic() - started < MIN_POLL_SECONDS:
+            time.sleep(MIN_POLL_SECONDS)
 
 
 def emit(text: str) -> None:
