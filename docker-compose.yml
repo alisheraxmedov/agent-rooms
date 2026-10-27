@@ -1,0 +1,29 @@
+services:
+  agent-rooms:
+    build: .
+    image: agent-rooms:0.1.0
+    container_name: agent-rooms
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./data:/data
+      - ./config/agents.json:/app/config/agents.json:ro
+    restart: unless-stopped
+    stop_grace_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3)
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -20,6 +20,7 @@ def main() -> None:
         port=settings.port,
         workers=1,
         log_level=settings.log_level.lower(),
+        timeout_graceful_shutdown=5,
     )
 
 
