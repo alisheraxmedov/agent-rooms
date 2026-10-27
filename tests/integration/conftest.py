@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,6 +99,14 @@ async def mcp_client(url: str, token: str, mode: str) -> AsyncIterator[Client]:
         transport = streamable_http_client(url, http_client=http, terminate_on_close=False)
         async with Client(transport, mode=mode) as client:  # type: ignore[arg-type]
             yield client
+
+
+@pytest.fixture
+def open_mcp(live_server: LiveServer, mcp_mode: str) -> Callable[[str], AbstractAsyncContextManager[Client]]:
+    def _open(agent: str) -> AbstractAsyncContextManager[Client]:
+        return mcp_client(live_server.mcp_url, TOKENS[agent], mcp_mode)
+
+    return _open
 
 
 @pytest.fixture

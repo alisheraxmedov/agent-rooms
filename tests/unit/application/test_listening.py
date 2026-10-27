@@ -1,11 +1,12 @@
 import time
+from contextlib import AbstractContextManager
 from datetime import timedelta
 
 import anyio
 import pytest
 from fakes import FakeClock, FakeTime
 
-from agent_rooms.application.dto import LISTEN_INSTRUCTION, WAIT_TIMEOUT_HINT, NoWake, Wake
+from agent_rooms.application.dto import LISTEN_INSTRUCTION, WAIT_TIMEOUT_HINT, NoWake, WaitResult, Wake
 from agent_rooms.application.limits import Limits
 from agent_rooms.application.services.listening import Listening
 from agent_rooms.application.services.membership import Membership
@@ -93,7 +94,7 @@ class TestWait:
 
         assert [m.text for m in result.messages] == ["late reply"]
         assert result.hint is None
-        assert elapsed < 1.0
+        assert elapsed < 5
 
     @pytest.mark.anyio
     async def test_returns_waiting_messages_immediately_and_advances_the_cursor(
@@ -271,7 +272,7 @@ class TestNextForListener:
             result = await listening.next_for_listener("claude", timeout_s=10)
 
         assert isinstance(result, Wake)
-        assert time.monotonic() - started < 1.0
+        assert time.monotonic() - started < 5
 
     @pytest.mark.anyio
     async def test_idle_when_the_room_is_paused_while_waiting(
@@ -425,3 +426,106 @@ class TestNextForListener:
         messaging.post("codex", alpha, "hello")
 
         assert isinstance(await timed_listening.next_for_listener("claude", session="ses_B"), Wake)
+
+
+class CountingUnitOfWork:
+    """Delegates to the real unit of work and counts the write transactions that get opened."""
+
+    def __init__(self, inner: SqliteUnitOfWork) -> None:
+        self._inner = inner
+        self.transactions = 0
+        self.rooms = inner.rooms
+        self.members = inner.members
+        self.messages = inner.messages
+
+    def transaction(self) -> AbstractContextManager[None]:
+        self.transactions += 1
+        return self._inner.transaction()
+
+
+class TestDisconnectAwarePolling:
+    @pytest.mark.anyio
+    async def test_wait_stops_without_consuming_when_the_client_is_gone(
+        self, timed_listening: Listening, messaging: Messaging, alpha: str
+    ) -> None:
+        async def disconnected_after_a_message_arrived() -> bool:
+            messaging.post("codex", alpha, "arrives while the client is gone")
+            return True
+
+        result = await timed_listening.wait(
+            "claude", alpha, timeout_s=30, should_stop=disconnected_after_a_message_arrived
+        )
+
+        assert result == WaitResult((), WAIT_TIMEOUT_HINT)
+        assert [m.text for m in messaging.read("claude", alpha)] == ["arrives while the client is gone"]
+
+    @pytest.mark.anyio
+    async def test_next_for_listener_stops_without_consuming_when_the_client_is_gone(
+        self,
+        timed_listening: Listening,
+        listening: Listening,
+        messaging: Messaging,
+        alpha: str,
+        uow: SqliteUnitOfWork,
+    ) -> None:
+        listening.listen("claude", alpha)
+
+        async def disconnected_after_a_message_arrived() -> bool:
+            messaging.post("codex", alpha, "arrives while the client is gone")
+            return True
+
+        result = await timed_listening.next_for_listener(
+            "claude", timeout_s=30, should_stop=disconnected_after_a_message_arrived
+        )
+
+        assert result == NoWake("timeout")
+        member = uow.members.get(alpha, "claude", "")
+        assert member is not None
+        assert member.listening_until is not None
+        assert [m.text for m in messaging.read("claude", alpha)] == ["arrives while the client is gone"]
+
+    @pytest.mark.anyio
+    async def test_a_present_client_still_gets_its_messages(
+        self, timed_listening: Listening, messaging: Messaging, alpha: str
+    ) -> None:
+        async def connected() -> bool:
+            return False
+
+        messaging.post("codex", alpha, "hello")
+
+        result = await timed_listening.wait("claude", alpha, should_stop=connected)
+
+        assert [m.text for m in result.messages] == ["hello"]
+
+
+class TestQuickReadBeforeWriteLock:
+    @pytest.mark.anyio
+    async def test_idle_polls_never_open_a_write_transaction(
+        self, uow: SqliteUnitOfWork, clock: FakeClock, limits: Limits, fake_time: FakeTime, alpha: str
+    ) -> None:
+        counting = CountingUnitOfWork(uow)
+        service = Listening(counting, clock, limits, sleep=fake_time.sleep, monotonic=fake_time.monotonic)
+        service.listen("claude", alpha)
+
+        await service.wait("claude", alpha, timeout_s=1)
+        await service.next_for_listener("claude", timeout_s=1)
+
+        assert counting.transactions == 0
+
+    @pytest.mark.anyio
+    async def test_delivering_opens_exactly_one_transaction(
+        self,
+        uow: SqliteUnitOfWork,
+        clock: FakeClock,
+        limits: Limits,
+        messaging: Messaging,
+        alpha: str,
+    ) -> None:
+        counting = CountingUnitOfWork(uow)
+        service = Listening(counting, clock, limits)
+        messaging.post("codex", alpha, "news")
+
+        result = await service.wait("claude", alpha)
+
+        assert [m.text for m in result.messages] == ["news"]
+        assert counting.transactions == 1

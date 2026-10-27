@@ -140,7 +140,11 @@ def build_routes(
     async def listen_next(request: Request) -> Response:
         timeout = _int_param(request, "timeout", limits.listen_next_default_s)
         result = await listening.next_for_listener(
-            agent_of(request), timeout, alias=_alias_param(request), session=_session_param(request)
+            agent_of(request),
+            timeout,
+            alias=_alias_param(request),
+            session=_session_param(request),
+            should_stop=request.is_disconnected,
         )
         if isinstance(result, Wake):
             return JSONResponse(wake_json(result))

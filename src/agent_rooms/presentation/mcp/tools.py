@@ -116,7 +116,14 @@ def register_tools(
         like read. On timeout returns no messages and a hint. Use it to wait briefly for a reply; for long
         waits call listen and end your turn instead. If the hint says the room is paused or closed, stop."""
         with _domain_errors():
-            result = await listening.wait(_agent(ctx), room, alias, timeout_s)
+            request = ctx.request_context.request
+            result = await listening.wait(
+                _agent(ctx),
+                room,
+                alias,
+                timeout_s,
+                should_stop=request.is_disconnected if request is not None else None,
+            )
             return {"messages": [message_json(message) for message in result.messages], "hint": result.hint}
 
     @server.tool()
