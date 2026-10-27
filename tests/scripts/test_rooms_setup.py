@@ -27,7 +27,8 @@ ROOMS = Path("/r/agent-mcp-rooms")
 HOME = Path("/h")
 TOKEN = "tok-123"
 TOKEN_DIR = "/h/.config/agent-rooms"
-HOOK = "python3 /r/agent-mcp-rooms/hooks/room_hook.py"
+BIN = Path(TOKEN_DIR) / "bin"
+HOOK = f"python3 {BIN}/room_hook.py"
 
 
 def mode_of(path: Path) -> int:
@@ -47,7 +48,7 @@ def test_render_claude_mcp_exact_payload():
 
 
 def test_render_claude_settings_exact_payload():
-    assert rs.render_claude_settings(ROOMS, Path(TOKEN_DIR) / "claude.token", URL) == {
+    assert rs.render_claude_settings(BIN, Path(TOKEN_DIR) / "claude.token", URL) == {
         "permissions": {"allow": ["mcp__rooms__*"]},
         "hooks": {
             "Stop": [
@@ -67,14 +68,14 @@ def test_render_claude_settings_exact_payload():
 
 def test_hook_command_passes_url_only_when_not_default():
     token_file = Path(TOKEN_DIR) / "claude.token"
-    custom = rs.hook_command(ROOMS, "claude", token_file, "http://127.0.0.1:9999")
+    custom = rs.hook_command(BIN, "claude", token_file, "http://127.0.0.1:9999")
     assert custom.endswith("--url http://127.0.0.1:9999")
-    assert "--url" not in rs.hook_command(ROOMS, "claude", token_file, URL)
+    assert "--url" not in rs.hook_command(BIN, "claude", token_file, URL)
 
 
 def test_hook_command_quotes_paths_with_spaces():
     command = rs.hook_command(Path("/a b/rooms"), "codex", Path("/h/t.token"), URL)
-    assert command.startswith("python3 '/a b/rooms/hooks/room_hook.py' --format codex")
+    assert command.startswith("python3 '/a b/rooms/room_hook.py' --format codex")
 
 
 CODEX_MCP = """[mcp_servers.rooms]
@@ -94,17 +95,17 @@ PROFILE_PATH = Path("/h/.codex/rooms.config.toml")
 
 
 def test_render_codex_hook_block_exact_text():
-    assert rs.render_codex_hook_block(ROOMS, Path(TOKEN_DIR) / "codex.token", URL) == CODEX_HOOK
+    assert rs.render_codex_hook_block(BIN, Path(TOKEN_DIR) / "codex.token", URL) == CODEX_HOOK
 
 
 def test_render_codex_profile_without_trust():
-    text = rs.render_codex_profile(URL, TOKEN, ROOMS, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH)
+    text = rs.render_codex_profile(URL, TOKEN, BIN, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH)
     assert text == CODEX_MCP + "\n" + CODEX_HOOK
 
 
 def test_render_codex_profile_with_trust_seed():
     text = rs.render_codex_profile(
-        URL, TOKEN, ROOMS, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH, trusted_hash="sha256:abc"
+        URL, TOKEN, BIN, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH, trusted_hash="sha256:abc"
     )
     state = '\n[hooks.state."/h/.codex/rooms.config.toml:stop:0:0"]\ntrusted_hash = "sha256:abc"\n'
     assert text == CODEX_MCP + "\n" + CODEX_HOOK + state
@@ -113,7 +114,7 @@ def test_render_codex_profile_with_trust_seed():
 def test_render_codex_profile_is_valid_toml_when_available():
     tomllib = pytest.importorskip("tomllib")
     text = rs.render_codex_profile(
-        URL, TOKEN, ROOMS, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH, trusted_hash="sha256:abc"
+        URL, TOKEN, BIN, Path(TOKEN_DIR) / "codex.token", PROFILE_PATH, trusted_hash="sha256:abc"
     )
     data = tomllib.loads(text)
     assert data["mcp_servers"]["rooms"]["http_headers"] == {"Authorization": "Bearer tok-123"}
@@ -220,7 +221,7 @@ def test_render_agy_mcp_exact_payload():
 
 
 def test_render_agy_hooks_exact_payload():
-    assert rs.render_agy_hooks(ROOMS, Path(TOKEN_DIR) / "agy.token", URL) == {
+    assert rs.render_agy_hooks(BIN, Path(TOKEN_DIR) / "agy.token", URL) == {
         "agent-rooms": {
             "Stop": [
                 {
@@ -235,7 +236,7 @@ def test_render_agy_hooks_exact_payload():
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python3 /r/agent-mcp-rooms/hooks/agy_approve_rooms.py",
+                            "command": f"python3 {BIN}/agy_approve_rooms.py",
                             "timeout": 10,
                         }
                     ],
@@ -302,6 +303,9 @@ def env(tmp_path, capsys):
     home.mkdir()
     rooms = tmp_path / "rooms-repo"
     (rooms / "config").mkdir(parents=True)
+    (rooms / "hooks").mkdir()
+    (rooms / "hooks" / "room_hook.py").write_text("# room_hook v1\n")
+    (rooms / "hooks" / "agy_approve_rooms.py").write_text("# agy_approve_rooms v1\n")
 
     class Env:
         pass
@@ -787,6 +791,10 @@ def installed(env):
     return env
 
 
+def hook_copies(e) -> list[Path]:
+    return [e.cfg / "bin" / "room_hook.py", e.cfg / "bin" / "agy_approve_rooms.py"]
+
+
 def own_files(e) -> list[Path]:
     return [
         e.claude_dir / "mcp.json",
@@ -794,6 +802,7 @@ def own_files(e) -> list[Path]:
         e.profile,
         e.bin / "claude-rooms",
         e.bin / "codex-rooms",
+        *hook_copies(e),
     ]
 
 
@@ -804,7 +813,7 @@ def test_install_requires_tokens(env):
     assert not (env.home / ".local").exists()
 
 
-def test_install_writes_exactly_the_five_files_plus_record(installed):
+def test_install_writes_exactly_the_seven_files_plus_record(installed):
     e = installed
     written = {p for p in e.home.rglob("*") if p.is_file()}
     tokens = {e.cfg / f"{a}.token" for a in rs.TOKEN_FILE_AGENTS}
@@ -816,11 +825,9 @@ def test_install_claude_files_have_exact_payload_and_mode_0600(installed):
     mcp = json.loads((e.claude_dir / "mcp.json").read_text())
     assert mcp == rs.render_claude_mcp(URL, e.agents["claude"])
     settings = json.loads((e.claude_dir / "settings.json").read_text())
-    assert settings == rs.render_claude_settings(e.rooms, e.cfg / "claude.token", URL)
+    assert settings == rs.render_claude_settings(e.cfg / "bin", e.cfg / "claude.token", URL)
     command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-    assert command == (
-        f"python3 {e.rooms}/hooks/room_hook.py --format claude --token-file {e.cfg}/claude.token"
-    )
+    assert command == (f"python3 {e.cfg}/bin/room_hook.py --format claude --token-file {e.cfg}/claude.token")
     assert mode_of(e.claude_dir / "mcp.json") == 0o600
     assert mode_of(e.claude_dir / "settings.json") == 0o600
     assert mode_of(e.claude_dir) == 0o700
@@ -829,11 +836,11 @@ def test_install_claude_files_have_exact_payload_and_mode_0600(installed):
 def test_install_codex_profile_has_seeded_trust_and_mode_0600(installed):
     e = installed
     text = e.profile.read_text()
-    hook = rs.render_codex_hook_block(e.rooms, e.cfg / "codex.token", URL)
+    hook = rs.render_codex_hook_block(e.cfg / "bin", e.cfg / "codex.token", URL)
     command = hook.splitlines()[3]
     digest = "sha256:" + hashlib.sha256(command.encode()).hexdigest()
     assert text == rs.render_codex_profile(
-        URL, e.agents["codex"], e.rooms, e.cfg / "codex.token", e.profile, trusted_hash=digest
+        URL, e.agents["codex"], e.cfg / "bin", e.cfg / "codex.token", e.profile, trusted_hash=digest
     )
     assert f'[hooks.state."{e.home}/.codex/rooms.config.toml:stop:0:0"]' in text
     assert mode_of(e.profile) == 0o600
@@ -1124,13 +1131,14 @@ def test_unmerge_opencode_of_a_pure_rooms_config_leaves_only_schema():
 def test_merge_and_unmerge_agy_files():
     mcp = rs.merge_agy_mcp(USER_AGY_MCP, rs.render_agy_mcp(URL, TOKEN))
     assert set(mcp["mcpServers"]) == {"other", "rooms"}
-    assert rs.unmerge_agy_mcp(mcp) == USER_AGY_MCP
-    assert rs.unmerge_agy_mcp(rs.merge_agy_mcp({}, rs.render_agy_mcp(URL, TOKEN))) == {}
-    hooks_ours = rs.render_agy_hooks(ROOMS, Path(TOKEN_DIR) / "agy.token", URL)
+    ours_mcp = rs.render_agy_mcp(URL, TOKEN)
+    assert rs.unmerge_agy_mcp(mcp, ours_mcp) == USER_AGY_MCP
+    assert rs.unmerge_agy_mcp(rs.merge_agy_mcp({}, ours_mcp), ours_mcp) == {}
+    hooks_ours = rs.render_agy_hooks(BIN, Path(TOKEN_DIR) / "agy.token", URL)
     hooks = rs.merge_agy_hooks(USER_AGY_HOOKS, hooks_ours)
     assert set(hooks) == {"my-hooks", "agent-rooms"}
-    assert rs.unmerge_agy_hooks(hooks) == USER_AGY_HOOKS
-    assert rs.unmerge_agy_hooks(rs.merge_agy_hooks({}, hooks_ours)) == {}
+    assert rs.unmerge_agy_hooks(hooks, hooks_ours) == USER_AGY_HOOKS
+    assert rs.unmerge_agy_hooks(rs.merge_agy_hooks({}, hooks_ours), hooks_ours) == {}
 
 
 def git_init(path: Path) -> Path:
@@ -1177,7 +1185,7 @@ def test_enable_repo_writes_exact_payloads_with_modes(repo):
     mcp = e.repo / ".agents" / "mcp_config.json"
     assert json.loads(mcp.read_text()) == rs.render_agy_mcp(URL, agents["agy"])
     hooks = e.repo / ".agents" / "hooks.json"
-    assert json.loads(hooks.read_text()) == rs.render_agy_hooks(e.rooms, e.cfg / "agy.token", URL)
+    assert json.loads(hooks.read_text()) == rs.render_agy_hooks(e.cfg / "bin", e.cfg / "agy.token", URL)
     assert mode_of(mcp) == 0o600
     assert agents["opencode"] not in opencode_file(e).read_text()
     assert agents["agy"] not in hooks.read_text()
@@ -1236,14 +1244,6 @@ def test_enable_repo_refuses_jsonc_with_comments_and_prints_the_snippet(repo):
     assert '"location_idle_timeout": "2 hours"' in out
     assert "Bearer {file:" in out
     assert plain_tokens(e)["agy"] not in out
-
-
-def test_enable_repo_refusal_does_not_block_the_agy_files(repo):
-    e = repo
-    (e.repo / ".opencode").mkdir()
-    opencode_file(e).write_text(COMMENTED)
-    assert enable(e) == 1
-    assert (e.repo / ".agents" / "hooks.json").is_file()
 
 
 def test_enable_repo_adds_git_excludes_exactly_once(repo):
@@ -1436,7 +1436,7 @@ def status_lines(text: str) -> dict[str, str]:
     result = {}
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) >= 3 and parts[0] in ("present", "missing", "unknown"):
+        if len(parts) >= 3 and parts[0] in ("present", "missing", "unknown", "stale"):
             result[parts[-1]] = parts[0]
     return result
 
@@ -1556,3 +1556,296 @@ def test_tokens_dry_run_does_not_promise_a_human_token_when_none_is_pending(env)
     env.out()
     assert env.run("--dry-run", "tokens") == 0
     assert "human token" not in env.out().lower()
+
+
+# --- read-only hook copies (SEC-10) -------------------------------------------------------------
+
+
+def test_install_copies_both_hooks_read_only_into_the_config_dir(installed):
+    e = installed
+    for copy_path in hook_copies(e):
+        source = e.rooms / "hooks" / copy_path.name
+        assert copy_path.read_text() == source.read_text()
+        assert mode_of(copy_path) == 0o555
+    assert mode_of(e.cfg / "bin") == 0o700
+
+
+def test_every_installed_hook_command_points_at_the_copies_not_the_repo(installed):
+    e = installed
+    texts = [(e.claude_dir / "settings.json").read_text(), e.profile.read_text()]
+    for text in texts:
+        assert f"{e.cfg}/bin/room_hook.py" in text
+        assert str(e.rooms) not in text
+
+
+def test_install_replaces_a_stale_copy_atomically(installed):
+    e = installed
+    (e.rooms / "hooks" / "room_hook.py").write_text("# room_hook v2\n")
+    assert e.run("install") == 0
+    copy_path = e.cfg / "bin" / "room_hook.py"
+    assert copy_path.read_text() == "# room_hook v2\n"
+    assert mode_of(copy_path) == 0o555
+    assert sorted(p.name for p in copy_path.parent.iterdir()) == ["agy_approve_rooms.py", "room_hook.py"]
+
+
+def test_install_fails_when_a_hook_source_is_missing(env):
+    env.run("tokens")
+    (env.rooms / "hooks" / "room_hook.py").unlink()
+    env.out()
+    assert env.run("install") == 1
+    assert "room_hook.py" in env.out()
+    assert not (env.home / ".codex").exists()
+
+
+def test_install_dry_run_reports_the_copies_and_writes_nothing(env):
+    env.run("tokens")
+    env.out()
+    before = snapshot(env.tmp)
+    assert env.run("--dry-run", "install") == 0
+    assert snapshot(env.tmp) == before
+    assert "would create" in env.out()
+    assert not (env.cfg / "bin").exists()
+
+
+def test_install_recomputes_the_codex_trust_hash_for_the_new_command_line(installed):
+    e = installed
+    text = e.profile.read_text()
+    current = re.search(r'trusted_hash = "(sha256:[0-9a-f]{64})"', text).group(1)
+    old_command = f"python3 {e.rooms}/hooks/room_hook.py --format codex --token-file {e.cfg}/codex.token"
+    old_hash = sha(f"command = {json.dumps(old_command)}")
+    legacy = re.sub(r'command = ".*"', f"command = {json.dumps(old_command)}", text).replace(
+        current, old_hash
+    )
+    e.profile.write_text(legacy)
+    assert e.run("install") == 0
+    assert e.profile.read_text() == text
+    assert old_hash not in e.profile.read_text()
+
+
+def test_status_reports_missing_and_stale_hook_copies(installed):
+    e = installed
+    (e.cfg / "bin" / "agy_approve_rooms.py").chmod(0o600)
+    (e.cfg / "bin" / "agy_approve_rooms.py").unlink()
+    (e.rooms / "hooks" / "room_hook.py").write_text("# room_hook v2\n")
+    e.out()
+    assert e.run("status", str(e.tmp)) == 0
+    states = status_lines(e.out())
+    assert states[str(e.cfg / "bin" / "room_hook.py")] == "stale"
+    assert states[str(e.cfg / "bin" / "agy_approve_rooms.py")] == "missing"
+    assert e.run("install") == 0
+    e.out()
+    e.run("status", str(e.tmp))
+    states = status_lines(e.out())
+    assert states[str(e.cfg / "bin" / "room_hook.py")] == "present"
+
+
+def test_status_flags_legacy_plain_registry_entries(env):
+    env.agents_file.write_text(json.dumps(LEGACY))
+    env.run("status", str(env.tmp))
+    assert "plain tokens" in env.out()
+    env.agents_file.unlink()
+    env.run("tokens")
+    env.out()
+    env.run("status", str(env.tmp))
+    assert "plain tokens" not in env.out()
+
+
+def test_uninstall_removes_the_hook_copies_and_their_directory(installed):
+    e = installed
+    assert e.run("uninstall") == 0
+    assert not (e.cfg / "bin").exists()
+
+
+def test_enable_repo_copies_the_hooks_and_points_agy_at_them(repo):
+    e = repo
+    assert enable(e) == 0
+    for copy_path in hook_copies(e):
+        assert copy_path.read_text() == (e.rooms / "hooks" / copy_path.name).read_text()
+        assert mode_of(copy_path) == 0o555
+    hooks = (e.repo / ".agents" / "hooks.json").read_text()
+    assert f"{e.cfg}/bin/room_hook.py" in hooks
+    assert f"{e.cfg}/bin/agy_approve_rooms.py" in hooks
+    assert str(e.rooms) not in hooks
+
+
+def test_enable_repo_records_the_copies_it_created_so_uninstall_removes_them(repo):
+    e = repo
+    enable(e)
+    assert sorted(json.loads((e.cfg / "installed.json").read_text())["files"]) == sorted(
+        str(p) for p in hook_copies(e)
+    )
+    assert e.run("uninstall") == 0
+    assert not (e.cfg / "bin").exists()
+
+
+def test_enable_repo_after_install_does_not_change_the_record(installed):
+    e = installed
+    project = git_init(e.tmp / "proj")
+    before = (e.cfg / "installed.json").read_text()
+    assert e.run("enable-repo", str(project)) == 0
+    assert (e.cfg / "installed.json").read_text() == before
+
+
+def test_enable_repo_refuses_a_foreign_file_in_the_hook_directory_and_writes_nothing(repo):
+    e = repo
+    (e.cfg / "bin").mkdir()
+    foreign = e.cfg / "bin" / "room_hook.py"
+    foreign.write_text("# mine\n")
+    e.out()
+    assert enable(e) == 1
+    assert "not created by rooms_setup" in e.out()
+    assert foreign.read_text() == "# mine\n"
+    assert not (e.repo / ".agents").exists()
+
+
+# --- setup edge cases ---------------------------------------------------------------------------
+
+
+def test_install_conflict_is_reported_before_codex_is_asked_for_trust(env, monkeypatch):
+    env.run("tokens")
+    foreign = env.home / ".codex" / "rooms.config.toml"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("# my own profile\n")
+    env.out()
+    monkeypatch.setattr(rs, "query_codex_hooks", lambda _home: pytest.fail("codex must not be started"))
+    assert env.run("install") == 1
+    assert "not created by rooms_setup" in env.out()
+    assert foreign.read_text() == "# my own profile\n"
+
+
+def test_install_records_only_files_it_created(env):
+    env.run("tokens")
+    env.out()
+    wrapper = env.home / ".local" / "bin" / "claude-rooms"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(rs.render_wrapper("claude-rooms"))
+    wrapper.chmod(0o755)
+    assert env.run("install") == 0
+    record = json.loads((env.cfg / "installed.json").read_text())
+    assert str(wrapper) not in record["files"]
+    assert str(env.home / ".local" / "bin" / "codex-rooms") in record["files"]
+    assert env.run("uninstall") == 0
+    assert wrapper.read_text() == rs.render_wrapper("claude-rooms")
+    assert not (env.home / ".local" / "bin" / "codex-rooms").exists()
+
+
+def test_install_keeps_earlier_records_when_run_again(installed):
+    e = installed
+    before = json.loads((e.cfg / "installed.json").read_text())
+    assert e.run("--url", "http://127.0.0.1:9999", "install") == 0
+    assert json.loads((e.cfg / "installed.json").read_text()) == before
+
+
+def test_enable_repo_with_a_refused_file_writes_nothing_at_all(repo):
+    e = repo
+    (e.repo / ".opencode").mkdir()
+    opencode_file(e).write_text(COMMENTED)
+    exclude = e.repo / ".git" / "info" / "exclude"
+    before_exclude = exclude.read_text()
+    before = snapshot(e.tmp)
+    e.out()
+    assert enable(e) == 1
+    assert snapshot(e.tmp) == before
+    assert exclude.read_text() == before_exclude
+    assert not (e.repo / ".agents").exists()
+    assert not (e.cfg / "bin").exists()
+    assert "comments" in e.out()
+
+
+def test_enable_repo_with_an_unexpected_shape_writes_nothing_at_all(repo):
+    e = repo
+    (e.repo / ".opencode").mkdir()
+    opencode_file(e).write_text(json.dumps({"plugins": "oops"}))
+    before = snapshot(e.tmp)
+    e.out()
+    assert enable(e) == 1
+    assert snapshot(e.tmp) == before
+    out = e.out()
+    assert "plugins" in out
+    assert not (e.repo / ".agents").exists()
+
+
+def test_enable_repo_with_a_broken_agy_file_leaves_the_opencode_file_untouched(repo):
+    e = repo
+    (e.repo / ".agents").mkdir()
+    (e.repo / ".agents" / "hooks.json").write_text("// comment\n{}")
+    before = snapshot(e.tmp)
+    assert enable(e) == 1
+    assert snapshot(e.tmp) == before
+    assert not opencode_file(e).exists()
+
+
+def ours_agy_mcp(token):
+    return rs.render_agy_mcp(URL, token)
+
+
+def test_unmerge_opencode_keeps_a_rooms_server_that_is_not_ours():
+    mine = {"type": "remote", "url": "http://elsewhere/mcp"}
+    config = {"mcp": {"servers": {"rooms": mine}}}
+    assert rs.unmerge_opencode(config, ours_opencode()) == config
+
+
+def test_unmerge_opencode_keeps_a_rooms_reviewer_that_is_not_ours():
+    config = {"agents": {"rooms-reviewer": {"mode": "primary", "description": "mine"}}}
+    assert rs.unmerge_opencode(config, ours_opencode()) == config
+
+
+def test_unmerge_opencode_keeps_a_plugin_entry_with_other_options():
+    package = ours_opencode()["plugins"][0]["package"]
+    config = {"plugins": [{"package": package, "options": {"url": "http://mine", "tokenFile": "/t"}}]}
+    assert rs.unmerge_opencode(config, ours_opencode()) == config
+
+
+def test_unmerge_opencode_removes_the_rooms_entries_when_they_are_ours():
+    merged = rs.merge_opencode({}, ours_opencode())
+    assert rs.unmerge_opencode(merged, ours_opencode()) == {"$schema": "https://opencode.ai/config.json"}
+
+
+def test_unmerge_agy_mcp_removes_our_server_whatever_token_it_holds():
+    config = rs.merge_agy_mcp(USER_AGY_MCP, ours_agy_mcp("old-rotated-token"))
+    assert rs.unmerge_agy_mcp(config, ours_agy_mcp("new")) == USER_AGY_MCP
+
+
+def test_unmerge_agy_mcp_keeps_a_rooms_server_that_is_not_ours():
+    config = {"mcpServers": {"rooms": {"serverUrl": "http://elsewhere/mcp", "headers": {}}}}
+    assert rs.unmerge_agy_mcp(config, ours_agy_mcp("t")) == config
+
+
+def test_unmerge_agy_hooks_keeps_an_agent_rooms_key_that_is_not_ours():
+    ours = rs.render_agy_hooks(BIN, Path(TOKEN_DIR) / "agy.token", URL)
+    config = {"agent-rooms": {"Stop": [{"type": "command", "command": "echo mine"}]}}
+    assert rs.unmerge_agy_hooks(config, ours) == config
+    assert rs.unmerge_agy_hooks(ours, ours) == {}
+
+
+def test_disable_repo_leaves_values_the_user_changed_after_enabling(repo):
+    e = repo
+    enable(e)
+    config = json.loads(opencode_file(e).read_text())
+    config["mcp"]["servers"]["rooms"]["url"] = "http://elsewhere/mcp"
+    config["agents"]["rooms-reviewer"]["description"] = "mine"
+    opencode_file(e).write_text(json.dumps(config))
+    assert e.run("disable-repo", str(e.repo)) == 0
+    left = json.loads(opencode_file(e).read_text())
+    assert left["mcp"]["servers"]["rooms"]["url"] == "http://elsewhere/mcp"
+    assert left["agents"]["rooms-reviewer"]["description"] == "mine"
+    assert "plugins" not in left
+
+
+def test_disable_repo_removes_an_agy_server_after_the_token_was_rotated(repo):
+    e = repo
+    enable(e)
+    e.run("tokens", "--rotate", "agy")
+    assert e.run("disable-repo", str(e.repo)) == 0
+    assert not (e.repo / ".agents").exists()
+
+
+def test_status_expects_no_human_token_file_and_flags_a_leftover(env):
+    env.run("status", str(env.tmp))
+    assert "human.token" not in env.out()
+    env.cfg.mkdir(parents=True)
+    (env.cfg / "human.token").write_text("x\n")
+    env.run("status", str(env.tmp))
+    out = env.out()
+    assert "human.token" in out
+    assert "tokens" in out

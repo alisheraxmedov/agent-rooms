@@ -2,7 +2,7 @@
 
 `scripts/rooms_setup.py` writes everything below. The global configs of Claude Code, Codex, OpenCode and Antigravity (`~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.config/opencode/*`, `~/.gemini/config/*`, `~/.gemini/antigravity*/*`) are never modified; the script refuses to write to any of them.
 
-Placeholders: `<TOKEN>` is the agent's plain token (stored only in `<HOME>/.config/agent-rooms/<agent>.token`; `config/agents.json` holds just its hash), `<HOME>` is your home directory, `<ROOMS_REPO>` is this repository, `<REPO>` is a project you enable. Hook commands always use absolute paths. If the server URL is not `http://127.0.0.1:8765`, the hook commands also get `--url <URL>`.
+Placeholders: `<TOKEN>` is the agent's plain token (stored only in `<HOME>/.config/agent-rooms/<agent>.token`; `config/agents.json` holds just its hash), `<HOME>` is your home directory, `<ROOMS_REPO>` is this repository, `<REPO>` is a project you enable. Hook commands always use absolute paths and always point at the read-only copies in `<HOME>/.config/agent-rooms/bin/` (see below), never at `<ROOMS_REPO>/hooks/`. If the server URL is not `http://127.0.0.1:8765`, the hook commands also get `--url <URL>`.
 
 Files that hold a token are mode `0600`; the token directory is `0700`. Never commit them.
 
@@ -23,7 +23,11 @@ Hooks write one-line diagnostics to stderr on error paths (server unreachable, H
 
 One live session per token per room: two Claude or Codex sessions with the same token and no `alias` share one membership and one listener. Give the second session its own `alias` (`ROOMS_ALIAS` or the hook's `--alias`).
 
-`install` and `enable-repo` are idempotent: a second run changes nothing and says so. `install` records its files in `<HOME>/.config/agent-rooms/installed.json`; `uninstall` removes exactly those files and leaves the tokens unless `--purge-tokens` is given. `install` never overwrites a file it did not create (it stops with an error instead).
+`install` and `enable-repo` are idempotent: a second run changes nothing and says so. `install` and `enable-repo` record the files they create in `<HOME>/.config/agent-rooms/installed.json`; a file that already existed with identical content is not recorded, so `uninstall` never deletes it. `uninstall` removes exactly the recorded files and leaves the tokens unless `--purge-tokens` is given. Neither command overwrites a file it did not create: all conflicts are reported before anything is written, and before Codex is asked to seed hook trust.
+
+## Hook copies
+
+Agents run as your user and edit files in your working repos, and a hook runs outside the agent's sandbox. So the hook commands do not point into this repository. `install` and `enable-repo` copy `hooks/room_hook.py` and `hooks/agy_approve_rooms.py` to `<HOME>/.config/agent-rooms/bin/` (directory `0700`, files `0555`) and replace a copy atomically when the source changed. Re-run `install` (or `enable-repo`) after you update the repository; `status` shows each copy as `present`, `missing` or `stale`. The Codex trust hash covers the command line, so `install` recomputes it for the copy's path. `uninstall` removes the copies; run `disable-repo` for your repos first, or their hooks will point at deleted files. The OpenCode plugin is still loaded from `<ROOMS_REPO>/integrations/opencode/agent-rooms`.
 
 ## Tokens
 
@@ -75,7 +79,7 @@ exec claude --mcp-config "$HOME/.config/agent-rooms/claude/mcp.json" --settings 
         "hooks": [
           {
             "type": "command",
-            "command": "python3 <ROOMS_REPO>/hooks/room_hook.py --format claude --token-file <HOME>/.config/agent-rooms/claude.token",
+            "command": "python3 <HOME>/.config/agent-rooms/bin/room_hook.py --format claude --token-file <HOME>/.config/agent-rooms/claude.token",
             "timeout": 3600
           }
         ]
@@ -112,7 +116,7 @@ startup_timeout_sec = 20
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = "python3 <ROOMS_REPO>/hooks/room_hook.py --format codex --token-file <HOME>/.config/agent-rooms/codex.token"
+command = "python3 <HOME>/.config/agent-rooms/bin/room_hook.py --format codex --token-file <HOME>/.config/agent-rooms/codex.token"
 timeout = 3600
 
 [hooks.state."<HOME>/.codex/rooms.config.toml:stop:0:0"]
@@ -183,7 +187,7 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
 ```
 
 - The script merges into an existing file and keeps every key it does not own. It adds `$schema` only when missing, keeps your own `experimental.location_idle_timeout` if you set one, and writes plain JSON (valid JSONC).
-- If the existing file contains comments or is not plain JSON, the script **refuses to edit it** and prints this snippet so you can add it by hand.
+- If an existing file contains comments or is not plain JSON, the script **refuses to edit it** and prints this snippet so you can add it by hand. `enable-repo` is all-or-nothing: it reads and plans all three repo files first and writes nothing (no repo file, no hook copy, no exclude line) when any of them is refused or has an unexpected shape.
 - `rooms-reviewer` denies `edit` and denies `shell` except `git diff`, `git log`, `git show` and `git status` (with or without arguments; `git ... --output*` is denied because it writes files). OpenCode V2 evaluates the **last matching rule** ([permissions](https://opencode.ai/v2/docs/permissions)), so the broad deny comes first and the allow rules after it; a pattern ending in ` *` also matches the bare command. Agent rules are appended after the global ones, so the global `rooms_*` allow still applies to the reviewer. Compound commands are scanned per part and any `deny` wins, but the scanner is best effort: the allow-list is a guard rail, not a sandbox. Other agents (`build`, ...) keep OpenCode's default policy, where `shell` and `edit` are allowed.
 - **The plugin prefixes every prompt it injects** with `[agent-rooms plugin] Delivered automatically by the agent-rooms plugin; not typed by the user.` and a blank line, so the session can tell a delivered room wake-up from something the user typed. If `session.prompt` fails the plugin retries once after 1 s. If the event stream ends or throws while the plugin is still active, it resubscribes after a 2 s backoff.
 - The plugin delivers at most once: a wake-up that is consumed but cannot be injected (both attempts failed) is not redelivered. Call `read` to catch up, and use the web UI for the full thread.
@@ -216,7 +220,7 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
     "Stop": [
       {
         "type": "command",
-        "command": "python3 <ROOMS_REPO>/hooks/room_hook.py --format agy --token-file <HOME>/.config/agent-rooms/agy.token",
+        "command": "python3 <HOME>/.config/agent-rooms/bin/room_hook.py --format agy --token-file <HOME>/.config/agent-rooms/agy.token",
         "timeout": 3600
       }
     ],
@@ -226,7 +230,7 @@ Do not use `--dangerously-bypass-hook-trust`: it turns off trust checks for ever
         "hooks": [
           {
             "type": "command",
-            "command": "python3 <ROOMS_REPO>/hooks/agy_approve_rooms.py",
+            "command": "python3 <HOME>/.config/agent-rooms/bin/agy_approve_rooms.py",
             "timeout": 10
           }
         ]
@@ -247,14 +251,15 @@ Merging keeps other servers in `mcpServers` and other hook names in `hooks.json`
 ## Disable and uninstall
 
 ```sh
-python3 scripts/rooms_setup.py disable-repo <REPO>   # removes only the rooms server, our plugin entry,
-                                                     # our permission rule, the rooms-reviewer agent,
-                                                     # the idle timeout if it still has our value,
-                                                     # the agent-rooms hooks, the rooms MCP entry and
-                                                     # our exclude lines; a file is deleted only when
-                                                     # nothing of yours remains in it
+python3 scripts/rooms_setup.py disable-repo <REPO>   # removes only values exactly equal to what enable-repo
+                                                     # writes: the rooms server, our plugin entry, our
+                                                     # permission rule, the rooms-reviewer agent, the idle
+                                                     # timeout, the agent-rooms hooks, the agy rooms MCP
+                                                     # entry (whatever token it holds) and our exclude
+                                                     # lines; anything you edited stays; a file is deleted
+                                                     # only when nothing of yours remains in it
 python3 scripts/rooms_setup.py uninstall             # removes the Claude/Codex files and wrappers
 python3 scripts/rooms_setup.py uninstall --purge-tokens   # also deletes <HOME>/.config/agent-rooms/*.token
 ```
 
-`config/agents.json` (the server's token registry) is never deleted by the script.
+`config/agents.json` (the server's token registry) is never deleted by the script. A repo enabled by an older version holds entries that differ from what the current version writes (hook paths, reviewer rules): run `enable-repo` again to update them, then `disable-repo` removes them.
