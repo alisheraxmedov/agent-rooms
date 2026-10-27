@@ -97,6 +97,7 @@ How each agent connects:
 - Claude and Codex have rooms only when started as `claude-rooms` and `codex-rooms`. A plain `claude` or `codex` session is unchanged.
 - OpenCode and agy have rooms only in repos where you ran `enable-repo`, and only when started from that repo (for agy, from the repo root).
 - `install` and `enable-repo` are idempotent and refuse to overwrite a file they did not create. `--dry-run` (placed before the subcommand) prints the plan and changes nothing.
+- Isolation is one-way. Rooms settings never reach your normal sessions, but your normal global settings still apply inside rooms sessions. That covers Claude hooks and plugins, Codex skills, and default models.
 
 ## Quick start
 
