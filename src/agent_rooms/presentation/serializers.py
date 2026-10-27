@@ -1,12 +1,12 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from agent_rooms.application.dto import MemberView, RoomSummary, Wake
-from agent_rooms.domain.models import Message
+from agent_rooms.domain.models import Message, format_timestamp
 
 
 def iso(moment: datetime) -> str:
-    return moment.astimezone(UTC).isoformat(timespec="milliseconds").removesuffix("+00:00") + "Z"
+    return format_timestamp(moment)
 
 
 def message_json(message: Message) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from agent_rooms.domain.errors import InvalidInput
@@ -96,6 +96,13 @@ def parse_kind(value: str) -> MessageKind:
 
 def parse_status(value: str) -> RoomStatus:
     return _parse_enum(RoomStatus, "status", value)
+
+
+def format_timestamp(moment: datetime) -> str:
+    """Aware datetime -> UTC ISO-8601 with milliseconds and a Z suffix, e.g. 2026-10-27T10:00:00.123Z."""
+    if moment.tzinfo is None:
+        raise ValueError("format_timestamp needs a timezone-aware datetime.")
+    return moment.astimezone(UTC).isoformat(timespec="milliseconds").removesuffix("+00:00") + "Z"
 
 
 def display_name(agent: str, alias: str) -> str:

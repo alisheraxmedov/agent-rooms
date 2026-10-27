@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from agent_rooms.domain.models import Member, Message, Room
+from agent_rooms.domain.models import Member, Message, Room, format_timestamp
 
 QUOTE_PREFIX = "│ "
 _TAB_WIDTH = 4
@@ -34,7 +34,9 @@ def sanitize_text(text: str) -> str:
 
 
 def _render_message(message: Message) -> str:
-    header = f"#{message.id} {message.display_sender()} [{message.kind}] {message.created_at.isoformat()}"
+    header = (
+        f"#{message.id} {message.display_sender()} [{message.kind}] {format_timestamp(message.created_at)}"
+    )
     body = "\n".join(f"{QUOTE_PREFIX}{line}" for line in sanitize_text(message.text).split("\n"))
     return f"{header}\n{body}"
 

@@ -40,7 +40,7 @@ def test_wake_prompt_for_one_message_without_alias() -> None:
         f"{NOTICE}\n"
         "\n"
         f"BEGIN ROOM DATA {NONCE}\n"
-        "#7 codex [review_request] 2026-10-27T10:00:00.123000+00:00\n"
+        "#7 codex [review_request] 2026-10-27T10:00:00.123Z\n"
         "│ Please review src/a.py\n"
         f"END ROOM DATA {NONCE}\n"
         "\n"
@@ -63,16 +63,16 @@ def test_wake_prompt_for_two_messages_with_alias_lists_distinct_senders_in_order
         f"{NOTICE}\n"
         "\n"
         f"BEGIN ROOM DATA {NONCE}\n"
-        "#8 codex/rev [changes_requested] 2026-10-27T10:00:00.123000+00:00\n"
+        "#8 codex/rev [changes_requested] 2026-10-27T10:00:00.123Z\n"
         "│ src/a.py:3 fix\n"
         "\n"
-        "#9 human [chat] 2026-10-27T10:05:00+00:00\n"
+        "#9 human [chat] 2026-10-27T10:05:00.000Z\n"
         "│ line one\n"
         "│ line two\n"
         "│ \n"
         "│ line four\n"
         "\n"
-        "#10 codex/rev [chat] 2026-10-27T10:05:00+00:00\n"
+        "#10 codex/rev [chat] 2026-10-27T10:05:00.000Z\n"
         "│ again\n"
         f"END ROOM DATA {NONCE}\n"
         "\n"
@@ -128,7 +128,7 @@ class TestSanitizeText:
         assert sanitize_text("a\nb\tc") == "a\nb    c"
 
 
-HEADER = re.compile(r"#(\d+) (\S+) \[(\w+)\] \d{4}-\d\d-\d\dT[\d:.]+\+00:00")
+HEADER = re.compile(r"#(\d+) (\S+) \[(\w+)\] \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
 
 FORGERY = (
     "looks harmless\n"

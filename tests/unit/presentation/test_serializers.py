@@ -1,7 +1,7 @@
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from agent_rooms.application.dto import MemberView, RoomSummary, Wake
-from agent_rooms.domain.models import Message, MessageKind, Role, RoomStatus
+from agent_rooms.domain.models import Message, MessageKind, Role, RoomStatus, format_timestamp
 from agent_rooms.presentation.serializers import (
     iso,
     member_json,
@@ -27,17 +27,12 @@ def make_message(**overrides: object) -> Message:
     return Message(**{**fields, **overrides})  # type: ignore[arg-type]
 
 
-def test_iso_uses_milliseconds_and_z_suffix() -> None:
-    assert iso(MOMENT) == "2026-10-27T10:00:00.123Z"
+def test_iso_is_the_shared_domain_timestamp_format() -> None:
+    assert iso(MOMENT) == format_timestamp(MOMENT) == "2026-10-27T10:00:00.123Z"
 
 
-def test_iso_pads_missing_milliseconds() -> None:
-    assert iso(datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)) == "2026-01-02T03:04:05.000Z"
-
-
-def test_iso_converts_other_offsets_to_utc() -> None:
-    tashkent = timezone(timedelta(hours=5))
-    assert iso(datetime(2026, 10, 27, 15, 0, 0, tzinfo=tashkent)) == "2026-10-27T10:00:00.000Z"
+def test_serialized_timestamps_match_the_wake_prompt_format() -> None:
+    assert message_json(make_message())["created_at"] == format_timestamp(MOMENT)
 
 
 def test_message_json_has_exactly_the_spec_keys() -> None:

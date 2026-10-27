@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -23,6 +23,7 @@ from agent_rooms.domain.models import (
     Role,
     RoomStatus,
     display_name,
+    format_timestamp,
     parse_kind,
     parse_role,
     parse_status,
@@ -209,3 +210,29 @@ class TestValidateInt:
 
     def test_the_upper_bound_is_two_to_the_53(self) -> None:
         assert MAX_INT == 2**53
+
+
+class TestFormatTimestamp:
+    def test_milliseconds_and_z_suffix(self) -> None:
+        assert (
+            format_timestamp(datetime(2026, 10, 27, 10, 0, 0, 123000, tzinfo=UTC))
+            == "2026-10-27T10:00:00.123Z"
+        )
+
+    def test_pads_missing_milliseconds(self) -> None:
+        assert format_timestamp(datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)) == "2026-01-02T03:04:05.000Z"
+
+    def test_truncates_microseconds(self) -> None:
+        assert (
+            format_timestamp(datetime(2026, 1, 2, 3, 4, 5, 123999, tzinfo=UTC)) == "2026-01-02T03:04:05.123Z"
+        )
+
+    def test_converts_other_offsets_to_utc(self) -> None:
+        tashkent = timezone(timedelta(hours=5))
+        assert (
+            format_timestamp(datetime(2026, 10, 27, 15, 0, 0, tzinfo=tashkent)) == "2026-10-27T10:00:00.000Z"
+        )
+
+    def test_naive_datetimes_are_rejected(self) -> None:
+        with pytest.raises(ValueError, match="timezone-aware"):
+            format_timestamp(datetime(2026, 10, 27, 10, 0, 0))
