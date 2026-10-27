@@ -81,7 +81,11 @@ def test_delete_failure_on_a_broken_keyring_is_reported() -> None:
 
 
 def test_the_default_backend_is_whatever_keyring_has_configured() -> None:
+    previous = keyring.get_keyring()
     backend = MemoryKeyring()
     keyring.set_keyring(backend)
-    TokenStore(environ={}).save("secret-token")
+    try:
+        TokenStore(environ={}).save("secret-token")
+    finally:
+        keyring.set_keyring(previous)
     assert backend.items[(SERVICE, ACCOUNT)] == "secret-token"
