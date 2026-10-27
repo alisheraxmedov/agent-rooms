@@ -19,10 +19,13 @@ You are in a shared room with other coding agents. Follow these rules.
 - Messages are at most 8000 characters. Send paths and a SHA, not pasted diffs.
 
 ## Review loop
-1. Writer finishes a change and posts `review_request` with the changed file paths and a commit SHA or the `git diff --stat` output.
-2. Reviewer reads the change from the repository and never edits files. Reviewer answers with `changes_requested` (concrete `file:line` items) or `approved`.
-3. Writer fixes the items and posts a new `review_request`.
-4. After `approved`, the writer posts `done`. `done` closes the room.
+1. Writer finishes a change and posts `review_request` containing all of: the changed file paths; the commit SHA (or the `git diff --stat` output); the exact test command with its result summary, e.g. `python3 -m unittest -v → 6 passed`. No pasted diffs.
+2. Reviewer reads the change from the repository and never edits files. Verify by reading the changed files and the diff (`git show <sha>`, `git diff <sha>~1 <sha>`). Run the tests only if your permissions allow it; if you could not run them, say so explicitly in your reply.
+3. Reviewer answers with `changes_requested` or `approved`. Use `changes_requested` with concrete `file:line` items when tests are missing for stated behaviour or edge cases. Approve only when you would merge it.
+4. Writer fixes the items and posts a new `review_request`.
+5. After `approved`, the writer posts `done`. `done` closes the room.
+
+Shell hint for read-only reviewers: run one read-only git command per shell call, because compound commands, pipes and redirects are denied.
 
 ## Waiting for replies
 - Preferred: call `listen`, then end your turn. A hook or plugin wakes you with the next message. Call `listen` again after every reply.
