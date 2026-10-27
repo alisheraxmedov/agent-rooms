@@ -69,7 +69,7 @@ def make_message(**overrides: object) -> Message:
 
 def test_enum_values() -> None:
     assert [s.value for s in RoomStatus] == ["active", "paused", "closed"]
-    assert [r.value for r in Role] == ["writer", "reviewer", "observer"]
+    assert [r.value for r in Role] == ["writer", "reviewer", "observer", "lead"]
     assert [k.value for k in MessageKind] == [
         "chat",
         "task",

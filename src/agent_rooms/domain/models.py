@@ -24,6 +24,7 @@ class Role(StrEnum):
     WRITER = "writer"
     REVIEWER = "reviewer"
     OBSERVER = "observer"
+    LEAD = "lead"
 
 
 class MessageKind(StrEnum):

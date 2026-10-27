@@ -197,3 +197,74 @@ class TestRoleExclusivity:
         membership.leave("claude", "alpha")
 
         membership.join("claude", "alpha", Role.REVIEWER, alias="now-reviewer")
+
+
+class TestSingleLead:
+    def test_first_lead_joins(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+
+        result = membership.join("claude", "alpha", Role.LEAD)
+
+        assert [(m.agent, m.role) for m in result.room.members] == [("claude", Role.LEAD)]
+
+    def test_second_lead_is_rejected_with_the_exact_message(
+        self, membership: Membership, rooms: RoomAdmin, uow: SqliteUnitOfWork
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.LEAD, alias="boss")
+
+        with pytest.raises(InvalidInput) as raised:
+            membership.join("codex", "alpha", Role.LEAD)
+
+        assert str(raised.value) == (
+            "Room 'alpha' already has a lead (claude/boss). Ask the human to change roles."
+        )
+        assert uow.members.get("alpha", "codex", "") is None
+
+    def test_same_agent_other_alias_cannot_be_a_second_lead(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.LEAD)
+
+        with pytest.raises(InvalidInput, match="already has a lead"):
+            membership.join("claude", "alpha", Role.LEAD, alias="second")
+
+    def test_the_lead_may_rejoin_as_lead(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.LEAD)
+
+        membership.join("claude", "alpha", Role.LEAD)
+
+    def test_the_lead_may_rejoin_as_something_else_and_free_the_seat(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.LEAD)
+        membership.join("claude", "alpha", Role.OBSERVER)
+
+        membership.join("codex", "alpha", Role.LEAD)
+
+    def test_leaving_frees_the_seat(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.LEAD)
+        membership.leave("claude", "alpha")
+
+        membership.join("codex", "alpha", Role.LEAD)
+
+    def test_lead_does_not_take_part_in_writer_reviewer_exclusivity(
+        self, membership: Membership, rooms: RoomAdmin
+    ) -> None:
+        rooms.create_room("alpha", "t")
+        membership.join("claude", "alpha", Role.WRITER)
+
+        membership.join("claude", "alpha", Role.LEAD, alias="boss")
+
+        assert len(rooms.get_summary("alpha").members) == 2
+
+    def test_another_room_may_have_its_own_lead(self, membership: Membership, rooms: RoomAdmin) -> None:
+        rooms.create_room("alpha", "t")
+        rooms.create_room("beta", "t")
+        membership.join("claude", "alpha", Role.LEAD)
+
+        membership.join("codex", "beta", Role.LEAD)

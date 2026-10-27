@@ -172,6 +172,12 @@ class SqliteMemberRepository:
         )
         return cursor.rowcount > 0
 
+    def set_role(self, room: str, agent: str, alias: str, role: Role) -> None:
+        self._db.run(
+            "UPDATE members SET role = ? WHERE room = ? AND agent = ? AND alias = ?",
+            (role.value, room, agent, alias),
+        )
+
     def set_listening(
         self, room: str, agent: str, alias: str, until: datetime | None, session: str | None
     ) -> None:

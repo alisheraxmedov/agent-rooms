@@ -429,6 +429,55 @@ class TestNextForListener:
         assert isinstance(await timed_listening.next_for_listener("claude", session="ses_B"), Wake)
 
 
+class TestWakePromptRole:
+    @pytest.mark.anyio
+    async def test_role_changed_while_listening_shows_the_new_role_and_the_notice(
+        self,
+        timed_listening: Listening,
+        listening: Listening,
+        rooms: RoomAdmin,
+        alpha: str,
+    ) -> None:
+        listening.listen("claude", alpha)
+
+        rooms.set_member_role(alpha, "claude", "", Role.LEAD)
+        result = await timed_listening.next_for_listener("claude")
+
+        assert isinstance(result, Wake)
+        assert "for claude (role: lead)." in result.prompt
+        assert "(role: writer)" not in result.prompt
+        assert "│ Human changed claude's role: writer → lead." in result.prompt
+        assert "Server-verified senders in this batch: system." in result.prompt
+
+    @pytest.mark.anyio
+    async def test_the_role_is_read_inside_the_delivery_transaction_not_from_the_candidate_query(
+        self,
+        timed_listening: Listening,
+        listening: Listening,
+        rooms: RoomAdmin,
+        uow: SqliteUnitOfWork,
+        messaging: Messaging,
+        alpha: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        listening.listen("claude", alpha)
+        messaging.post("codex", alpha, "hello")
+        real_listening = uow.members.listening
+
+        def stale_candidates(*args: object, **kwargs: object) -> list:
+            candidates = real_listening(*args, **kwargs)  # type: ignore[arg-type]
+            rooms.set_member_role(alpha, "claude", "", Role.OBSERVER)
+            return candidates
+
+        monkeypatch.setattr(uow.members, "listening", stale_candidates)
+
+        result = await timed_listening.next_for_listener("claude")
+
+        assert isinstance(result, Wake)
+        assert "(role: observer)" in result.prompt
+        assert "(role: writer)" not in result.prompt
+
+
 class TestWakePromptHardening:
     @pytest.mark.anyio
     async def test_each_wake_gets_a_fresh_nonce_from_the_injected_factory(

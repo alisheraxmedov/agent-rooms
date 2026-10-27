@@ -2,7 +2,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Protocol
 
-from agent_rooms.domain.models import Member, Message, MessageKind, Room, RoomStatus
+from agent_rooms.domain.models import Member, Message, MessageKind, Role, Room, RoomStatus
 
 
 class Clock(Protocol):
@@ -27,6 +27,7 @@ class MemberRepository(Protocol):
     def get(self, room: str, agent: str, alias: str) -> Member | None: ...
     def list_for_room(self, room: str) -> list[Member]: ...
     def remove(self, room: str, agent: str, alias: str) -> bool: ...
+    def set_role(self, room: str, agent: str, alias: str, role: Role) -> None: ...
     def set_listening(
         self, room: str, agent: str, alias: str, until: datetime | None, session: str | None
     ) -> None: ...

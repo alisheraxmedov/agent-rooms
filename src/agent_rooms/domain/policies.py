@@ -1,7 +1,8 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from agent_rooms.domain.errors import KindNotAllowed
-from agent_rooms.domain.models import MessageKind, Role, RoomStatus
+from agent_rooms.domain.errors import InvalidInput, KindNotAllowed
+from agent_rooms.domain.models import Member, MessageKind, Role, RoomStatus, display_name
 
 ROLE_KINDS: dict[Role, frozenset[MessageKind]] = {
     Role.WRITER: frozenset(
@@ -11,6 +12,7 @@ ROLE_KINDS: dict[Role, frozenset[MessageKind]] = {
         {MessageKind.CHAT, MessageKind.TASK, MessageKind.CHANGES_REQUESTED, MessageKind.APPROVED}
     ),
     Role.OBSERVER: frozenset({MessageKind.CHAT}),
+    Role.LEAD: frozenset({MessageKind.CHAT, MessageKind.TASK, MessageKind.DONE}),
 }
 HUMAN_KINDS: frozenset[MessageKind] = frozenset({MessageKind.CHAT, MessageKind.TASK})
 
@@ -70,3 +72,28 @@ def after_post_trip(
 
 def status_change_notice(status: RoomStatus) -> str:
     return _HUMAN_NOTICES[status]
+
+
+def ensure_single_lead(room: str, members: Iterable[Member], agent: str, alias: str) -> None:
+    """A room has at most one lead identity (agent + alias); `agent`/`alias` may already be that lead."""
+    for other in members:
+        if other.role is Role.LEAD and not (other.agent == agent and other.alias == alias):
+            raise InvalidInput(
+                f"Room '{room}' already has a lead ({other.display_name()}). Ask the human to change roles."
+            )
+
+
+def ensure_role_exclusive(room: str, members: Iterable[Member], agent: str, alias: str, role: Role) -> None:
+    """One agent identity cannot be both writer and reviewer in a room, across aliases."""
+    opposite = {Role.WRITER: Role.REVIEWER, Role.REVIEWER: Role.WRITER}.get(role)
+    for other in members:
+        if other.agent == agent and other.alias != alias and other.role is opposite:
+            raise InvalidInput(
+                f"An agent cannot be both writer and reviewer in room '{room}'. "
+                f"You already joined as {other.role} ({display_name(agent, other.alias)}). "
+                "Join as observer instead, or leave that persona first with leave_room."
+            )
+
+
+def role_change_notice(display: str, old: Role, new: Role) -> str:
+    return f"Human changed {display}'s role: {old} → {new}."

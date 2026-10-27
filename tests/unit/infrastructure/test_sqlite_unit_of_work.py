@@ -174,6 +174,22 @@ class TestMembers:
         assert member is not None
         assert (member.listening_until, member.listener_session) == (None, None)
 
+    def test_set_role_changes_only_the_role_of_that_identity(self, uow: SqliteUnitOfWork) -> None:
+        uow.members.upsert(make_member())
+        uow.members.upsert(make_member(alias="fixer"))
+        uow.members.set_listening("alpha", "claude", "", at(60), "ses_A")
+        uow.members.advance_cursor("alpha", "claude", "", 9)
+
+        uow.members.set_role("alpha", "claude", "", Role.LEAD)
+
+        changed = uow.members.get("alpha", "claude", "")
+        assert changed == replace(
+            make_member(), role=Role.LEAD, last_read_id=9, listening_until=at(60), listener_session="ses_A"
+        )
+        other = uow.members.get("alpha", "claude", "fixer")
+        assert other is not None
+        assert other.role is Role.WRITER
+
     def test_clear_listening_in_room_clears_every_member_of_that_room_only(
         self, uow: SqliteUnitOfWork
     ) -> None:

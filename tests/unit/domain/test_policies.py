@@ -1,7 +1,9 @@
+from datetime import UTC, datetime
+
 import pytest
 
-from agent_rooms.domain.errors import KindNotAllowed
-from agent_rooms.domain.models import MessageKind, Role, RoomStatus
+from agent_rooms.domain.errors import InvalidInput, KindNotAllowed
+from agent_rooms.domain.models import Member, MessageKind, Role, RoomStatus
 from agent_rooms.domain.policies import (
     HUMAN_KINDS,
     ROLE_KINDS,
@@ -9,7 +11,10 @@ from agent_rooms.domain.policies import (
     after_post_trip,
     ensure_human_kind,
     ensure_kind_allowed,
+    ensure_role_exclusive,
+    ensure_single_lead,
     message_cap_trip,
+    role_change_notice,
     status_change_notice,
 )
 
@@ -18,6 +23,7 @@ EXPECTED = {
     Role.WRITER: {K.CHAT, K.TASK, K.REVIEW_REQUEST, K.DONE},
     Role.REVIEWER: {K.CHAT, K.TASK, K.CHANGES_REQUESTED, K.APPROVED},
     Role.OBSERVER: {K.CHAT},
+    Role.LEAD: {K.CHAT, K.TASK, K.DONE},
 }
 
 
@@ -109,3 +115,67 @@ def test_guard_trip_is_frozen() -> None:
     trip = GuardTrip(RoomStatus.PAUSED, "x")
     with pytest.raises(AttributeError):
         trip.notice = "y"  # type: ignore[misc]
+
+
+def member(agent: str, role: Role, alias: str = "") -> Member:
+    return Member(
+        room="alpha",
+        agent=agent,
+        alias=alias,
+        role=role,
+        last_read_id=0,
+        listening_until=None,
+        listener_session=None,
+        joined_at=datetime(2026, 10, 27, tzinfo=UTC),
+    )
+
+
+def test_lead_role_exists_with_value_lead() -> None:
+    assert Role("lead") is Role.LEAD
+
+
+def test_lead_may_post_done_and_task_but_not_review_kinds() -> None:
+    for kind in (K.CHAT, K.TASK, K.DONE):
+        ensure_kind_allowed(Role.LEAD, kind)
+    for kind in (K.REVIEW_REQUEST, K.CHANGES_REQUESTED, K.APPROVED):
+        with pytest.raises(KindNotAllowed):
+            ensure_kind_allowed(Role.LEAD, kind)
+
+
+class TestSingleLead:
+    def test_no_lead_yet_is_fine(self) -> None:
+        ensure_single_lead("alpha", [member("claude", Role.WRITER)], "codex", "")
+
+    def test_another_identity_leading_is_rejected_with_actionable_text(self) -> None:
+        with pytest.raises(
+            InvalidInput,
+            match=r"Room 'alpha' already has a lead \(claude/boss\)\. Ask the human to change roles\.",
+        ):
+            ensure_single_lead("alpha", [member("claude", Role.LEAD, "boss")], "codex", "")
+
+    def test_the_lead_itself_may_rejoin_as_lead(self) -> None:
+        ensure_single_lead("alpha", [member("claude", Role.LEAD)], "claude", "")
+
+    def test_same_agent_under_another_alias_is_another_identity(self) -> None:
+        with pytest.raises(InvalidInput, match="already has a lead"):
+            ensure_single_lead("alpha", [member("claude", Role.LEAD)], "claude", "second")
+
+
+class TestRoleExclusive:
+    def test_writer_and_reviewer_across_aliases_conflict(self) -> None:
+        with pytest.raises(InvalidInput, match="cannot be both writer and reviewer in room 'alpha'"):
+            ensure_role_exclusive("alpha", [member("codex", Role.REVIEWER)], "codex", "x", Role.WRITER)
+
+    def test_same_persona_may_switch(self) -> None:
+        ensure_role_exclusive("alpha", [member("codex", Role.REVIEWER)], "codex", "", Role.WRITER)
+
+    @pytest.mark.parametrize("role", [Role.OBSERVER, Role.LEAD])
+    def test_observer_and_lead_never_conflict(self, role: Role) -> None:
+        ensure_role_exclusive("alpha", [member("codex", Role.REVIEWER)], "codex", "x", role)
+
+
+def test_role_change_notice_text() -> None:
+    assert (
+        role_change_notice("claude/fixer", Role.WRITER, Role.LEAD)
+        == "Human changed claude/fixer's role: writer → lead."
+    )
