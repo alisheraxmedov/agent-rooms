@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import takewhile
 
@@ -38,6 +39,23 @@ class SetStatus:
     status: str
 
 
+ROLES = ("writer", "reviewer", "observer", "lead")
+
+
+@dataclass(frozen=True, slots=True)
+class SetRole:
+    member: str
+    role: str
+
+    @property
+    def agent(self) -> str:
+        return self.member.partition("/")[0]
+
+    @property
+    def alias(self) -> str:
+        return self.member.partition("/")[2]
+
+
 @dataclass(frozen=True, slots=True)
 class Delete:
     slug: str | None
@@ -58,7 +76,7 @@ class Invalid:
     message: str
 
 
-Command = Say | Task | Login | Logout | Room | New | SetStatus | Delete | Help | Quit | Invalid
+Command = Say | Task | Login | Logout | Room | New | SetStatus | SetRole | Delete | Help | Quit | Invalid
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +93,9 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("room", "/room <slug>", "Switch to a room", takes_arguments=True),
     CommandSpec("new", "/new <slug> <topic…>", "Create a room and switch to it", takes_arguments=True),
     CommandSpec("task", "/task <text>", "Post a message of kind task", takes_arguments=True),
+    CommandSpec(
+        "role", "/role <agent[/alias]> <role>", "Set a member's role (writer, reviewer, observer, lead)", True
+    ),
     CommandSpec("pause", "/pause", "Pause the selected room"),
     CommandSpec("resume", "/resume", "Resume the selected room"),
     CommandSpec("close", "/close", "Close the selected room"),
@@ -100,6 +121,15 @@ def _usage(name: str) -> Invalid:
     return Invalid(f"Usage: {_USAGE[name]}")
 
 
+def _parse_role(args: list[str]) -> Command:
+    if len(args) != 2:
+        return _usage("role")
+    role = args[1].lower()
+    if role not in ROLES:
+        return Invalid(f"Unknown role {args[1]}. Roles: {', '.join(ROLES)}.")
+    return SetRole(args[0], role)
+
+
 def _parse_slash(text: str) -> Command:
     head, _, rest = text[1:].partition(" ")
     name, rest = head.lower(), rest.strip()
@@ -115,6 +145,8 @@ def _parse_slash(text: str) -> Command:
         case "new":
             slug, _, topic = rest.partition(" ")
             result = New(slug, topic.strip()) if slug and topic.strip() else _usage(name)
+        case "role":
+            result = _parse_role(args)
         case "delete":
             result = Delete(args[0] if args else None) if len(args) <= 1 else _usage(name)
         case _:
@@ -157,15 +189,28 @@ def _complete_command(prefix: str) -> Completion | None:
     return Completion(_common_prefix(names), tuple(names))
 
 
-def complete(line: str, slugs: list[str]) -> Completion | None:
+def _completion(
+    command: str, prefix: str, candidates: list[str], *, then_space: bool = False
+) -> Completion | None:
+    matches = [candidate for candidate in candidates if candidate.startswith(prefix)]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return Completion(f"{command}{matches[0]}{' ' if then_space else ''}", ())
+    return Completion(f"{command}{_common_prefix(matches)}", tuple(matches))
+
+
+def complete(line: str, slugs: list[str], members: Sequence[str] = ()) -> Completion | None:
     if not line.startswith("/"):
         return None
     if " " not in line:
         return _complete_command(line[1:])
-    command, _, argument = line[1:].partition(" ")
-    if command.lower() not in _SLUG_COMMANDS or " " in argument:
-        return None
-    matches = [slug for slug in slugs if slug.startswith(argument)]
-    if not matches:
-        return None
-    return Completion(f"/{command} {_common_prefix(matches)}", tuple(matches) if len(matches) > 1 else ())
+    command, _, rest = line[1:].partition(" ")
+    name, args = command.lower(), rest.split(" ")
+    if name in _SLUG_COMMANDS and len(args) == 1:
+        return _completion(f"/{command} ", args[0], slugs)
+    if name == "role" and len(args) == 1:
+        return _completion(f"/{command} ", args[0], list(members), then_space=True)
+    if name == "role" and len(args) == 2 and args[0] in members:
+        return _completion(f"/{command} {args[0]} ", args[1], list(ROLES))
+    return None

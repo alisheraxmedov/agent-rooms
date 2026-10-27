@@ -124,3 +124,40 @@ async def test_a_closed_port_is_offline() -> None:
         await client.list_rooms()
     await client.aclose()
     assert caught.value.offline
+
+
+@pytest.mark.anyio
+async def test_roles_are_assigned_and_a_new_lead_demotes_the_old_one(api: RoomsApi, call: Any) -> None:
+    await api.create_room("alpha", "Pair work")
+    await call("claude", "join_room", room="alpha", role="writer", alias="main")
+    await call("codex", "join_room", room="alpha", role="reviewer")
+    await call("opencode", "join_room", room="alpha", role="observer")
+
+    def roles(summary: Any) -> dict[str, str]:
+        return {member.name: member.role for member in summary.members}
+
+    summary = await api.set_role("alpha", "codex", "", "writer")
+    assert roles(summary) == {"claude/main": "writer", "codex": "writer", "opencode": "observer"}
+
+    summary = await api.set_role("alpha", "claude", "main", "lead")
+    assert roles(summary)["claude/main"] == "lead"
+    summary = await api.set_role("alpha", "opencode", "", "lead")
+    assert roles(summary) == {"claude/main": "observer", "codex": "writer", "opencode": "lead"}
+
+    texts = [m.text for m in (await api.history("alpha")).messages if m.kind == "system"]
+    assert any("claude/main" in text and "lead → observer" in text for text in texts)
+
+
+@pytest.mark.anyio
+async def test_role_errors_carry_the_servers_code_and_message(api: RoomsApi, call: Any) -> None:
+    await api.create_room("alpha", "Topic")
+    await call("claude", "join_room", room="alpha", role="writer")
+    with pytest.raises(ApiError) as stranger:
+        await api.set_role("alpha", "codex", "", "reviewer")
+    assert (stranger.value.status, stranger.value.code) == (409, "not_a_member")
+    with pytest.raises(ApiError) as invalid:
+        await api.set_role("alpha", "claude", "", "boss")
+    assert (invalid.value.status, invalid.value.code) == (400, "invalid_input")
+    with pytest.raises(ApiError) as missing:
+        await api.set_role("nope", "claude", "", "lead")
+    assert (missing.value.status, missing.value.code) == (404, "room_not_found")

@@ -4,7 +4,7 @@ SLUGS = ["auth-refactor", "auth-docs", "billing"]
 
 
 def test_a_unique_command_prefix_completes_with_a_trailing_space_when_it_takes_arguments() -> None:
-    assert complete("/ro", SLUGS) == Completion("/room ", ())
+    assert complete("/roo", SLUGS) == Completion("/room ", ())
     assert complete("/ta", SLUGS) == Completion("/task ", ())
 
 
@@ -23,7 +23,7 @@ def test_a_lone_slash_lists_every_command() -> None:
     assert result is not None
     assert result.line == "/"
     assert "/room" in result.options
-    assert len(result.options) == 11
+    assert len(result.options) == 12
 
 
 def test_room_slugs_complete_after_room_and_delete() -> None:
@@ -42,3 +42,32 @@ def test_nothing_completes_for_plain_text_unknown_prefixes_or_other_arguments() 
     assert complete("/new bi", SLUGS) is None
     assert complete("/room billing extra", SLUGS) is None
     assert complete("", SLUGS) is None
+
+
+MEMBERS = ["claude/main", "claude/second", "codex"]
+
+
+def test_role_completes_member_names_of_the_room() -> None:
+    assert complete("/role co", SLUGS, MEMBERS) == Completion("/role codex ", ())
+    assert complete("/role cl", SLUGS, MEMBERS) == Completion(
+        "/role claude/", ("claude/main", "claude/second")
+    )
+
+
+def test_role_completes_the_four_roles_after_the_member() -> None:
+    assert complete("/role codex re", SLUGS, MEMBERS) == Completion("/role codex reviewer", ())
+    assert complete("/role codex o", SLUGS, MEMBERS) == Completion("/role codex observer", ())
+    assert complete("/role codex ", SLUGS, MEMBERS) == Completion(
+        "/role codex ", ("writer", "reviewer", "observer", "lead")
+    )
+
+
+def test_role_does_not_complete_unknown_members_or_extra_arguments() -> None:
+    assert complete("/role zzz", SLUGS, MEMBERS) is None
+    assert complete("/role codex zzz", SLUGS, MEMBERS) is None
+    assert complete("/role codex lead extra", SLUGS, MEMBERS) is None
+    assert complete("/role c", SLUGS) is None
+
+
+def test_a_unique_prefix_of_role_completes_to_the_command() -> None:
+    assert complete("/ro", SLUGS, MEMBERS) == Completion("/ro", ("/room", "/role"))

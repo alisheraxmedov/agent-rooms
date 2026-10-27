@@ -266,5 +266,10 @@ class RoomsApi:
         raw = await self._json("POST", f"/api/rooms/{quote(room, safe='')}/status", json={"status": status})
         return _parse(_summary, raw)
 
+    async def set_role(self, room: str, agent: str, alias: str, role: str) -> Summary:
+        path = f"/api/rooms/{quote(room, safe='')}/members/role"
+        raw = await self._json("POST", path, json={"agent": agent, "alias": alias, "role": role})
+        return _parse(_summary, raw)
+
     async def delete_room(self, room: str) -> None:
         await self._send("DELETE", f"/api/rooms/{quote(room, safe='')}")

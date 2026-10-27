@@ -201,6 +201,9 @@ async def test_pause_resume_and_close_change_the_room_status(make_app: Any, rest
         await submit(pilot, app, "/room r1")
         for command, expected in (("/pause", "paused"), ("/resume", "active"), ("/close", "closed")):
             await submit(pilot, app, command)
+            if command == "/close":
+                await until(pilot, lambda: app.mode == "confirm")
+                await submit(pilot, app, "yes")
             await until(
                 pilot,
                 lambda status=expected: app.state.summary is not None and app.state.summary.status == status,
@@ -239,6 +242,8 @@ async def test_delete_needs_a_closed_room_and_the_slug_typed_back(make_app: Any,
         assert app.mode == "normal"
 
         await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.mode == "confirm")
+        await submit(pilot, app, "doomed")
         await until(pilot, lambda: app.state.summary is not None and app.state.summary.status == "closed")
 
         await submit(pilot, app, "/delete")
@@ -406,7 +411,7 @@ async def test_tab_completes_commands_and_room_slugs(make_app: Any, rest: Any) -
     async with app.run_test(size=SIZE) as pilot:
         await until(pilot, lambda: len(app.state.slugs) == 3)
         field = app.query_one(CommandInput)
-        await pilot.press(*"/ro", "tab")
+        await pilot.press(*"/roo", "tab")
         assert field.value == "/room "
         await pilot.press(*"bi", "tab")
         assert field.value == "/room billing"
@@ -431,6 +436,7 @@ async def test_help_lists_every_command_and_closes_on_a_key(make_app: Any) -> No
             "/room",
             "/new",
             "/task",
+            "/role",
             "/pause",
             "/resume",
             "/close",
@@ -488,3 +494,204 @@ async def test_new_messages_follow_the_bottom_but_do_not_yank_a_scrolled_view(
             await pilot.press("pagedown")
         await until(pilot, lambda: thread.scroll_y >= thread.max_scroll_y - 1)
         await until(pilot, lambda: "new" not in rendered(app.query_one("#new-indicator")))
+
+
+async def make_team(rest: Any, call: Any, slug: str = "alpha") -> None:
+    await make_room(rest, slug, "Pair work")
+    await call("claude", "join_room", room=slug, role="writer", alias="main")
+    await call("codex", "join_room", room=slug, role="reviewer")
+
+
+def roles_in_panel(app: AgentRoomsApp) -> str:
+    return rendered(app.query_one("#members"))
+
+
+@pytest.mark.anyio
+async def test_role_changes_a_members_role_and_refreshes_the_members_panel(
+    make_app: Any, rest: Any, call: Any
+) -> None:
+    await make_team(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: "reviewer" in roles_in_panel(app))
+        await submit(pilot, app, "/role codex writer")
+        await until(pilot, lambda: "reviewer" not in roles_in_panel(app))
+        assert roles_in_panel(app).count("writer") == 2
+        assert "codex is now writer" in app.status_text
+        room = await server_room(rest, "alpha")
+        assert room is not None
+        assert {(m["agent"], m["role"]) for m in room["members"]} == {
+            ("claude", "writer"),
+            ("codex", "writer"),
+        }
+        await until(pilot, lambda: "role: reviewer → writer" in thread_text(app))
+
+
+@pytest.mark.anyio
+async def test_role_accepts_an_agent_with_alias(make_app: Any, rest: Any, call: Any) -> None:
+    await make_team(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: app.state.summary is not None and len(app.state.summary.members) == 2)
+        await submit(pilot, app, "/role claude/main observer")
+        await until(pilot, lambda: "claude/main is now observer" in app.status_text)
+        assert app.mode == "normal"
+
+
+@pytest.mark.anyio
+async def test_making_someone_lead_asks_for_yes_and_demotes_the_old_lead(
+    make_app: Any, rest: Any, call: Any
+) -> None:
+    await make_team(rest, call)
+    await call("opencode", "join_room", room="alpha", role="lead")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: "★ lead" in roles_in_panel(app))
+
+        await submit(pilot, app, "/role codex lead")
+        await until(pilot, lambda: app.mode == "confirm")
+        assert "codex" in app.status_text
+        assert "yes" in app.status_text
+        assert "opencode" in app.status_text
+        await submit(pilot, app, "no")
+        await until(pilot, lambda: app.mode == "normal")
+        room = await server_room(rest, "alpha")
+        assert room is not None
+        assert {m["agent"]: m["role"] for m in room["members"]}["codex"] == "reviewer"
+
+        await submit(pilot, app, "/role codex lead")
+        await until(pilot, lambda: app.mode == "confirm")
+        await submit(pilot, app, "yes")
+        await until(
+            pilot, lambda: app.mode == "normal" and "opencode" not in roles_in_panel(app).split("★")[0]
+        )
+        room = await server_room(rest, "alpha")
+        assert room is not None
+        assert {m["agent"]: m["role"] for m in room["members"]} == {
+            "claude": "writer",
+            "codex": "lead",
+            "opencode": "observer",
+        }
+        panel = roles_in_panel(app)
+        assert panel.count("★ lead") == 1
+        assert "observer" in panel
+        await until(pilot, lambda: "lead → observer" in thread_text(app))
+
+
+@pytest.mark.anyio
+async def test_escape_cancels_the_lead_confirmation(make_app: Any, rest: Any, call: Any) -> None:
+    await make_team(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await submit(pilot, app, "/role codex lead")
+        await until(pilot, lambda: app.mode == "confirm")
+        await pilot.press("escape")
+        await until(pilot, lambda: app.mode == "normal")
+        room = await server_room(rest, "alpha")
+        assert room is not None
+        assert {m["agent"]: m["role"] for m in room["members"]}["codex"] == "reviewer"
+
+
+@pytest.mark.anyio
+async def test_role_for_a_non_member_shows_the_servers_message(make_app: Any, rest: Any, call: Any) -> None:
+    await make_team(rest, call)
+    expected = (
+        await rest(
+            "human",
+            "POST",
+            "/api/rooms/alpha/members/role",
+            json={"agent": "ghost", "alias": "", "role": "writer"},
+        )
+    ).json()["message"]
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await submit(pilot, app, "/role ghost writer")
+        await until(pilot, lambda: app.status_is_error)
+        assert app.status_text == expected
+        assert app.mode == "normal"
+
+
+@pytest.mark.anyio
+async def test_role_needs_a_selected_room_and_valid_arguments(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await submit(pilot, app, "/role codex writer")
+        await until(pilot, lambda: "/room" in app.status_text)
+        assert app.status_is_error
+        await submit(pilot, app, "/role codex")
+        await until(pilot, lambda: app.status_text.startswith("Usage: /role"))
+        await submit(pilot, app, "/role codex boss")
+        await until(pilot, lambda: "boss" in app.status_text)
+
+
+@pytest.mark.anyio
+async def test_tab_completes_member_names_and_roles(make_app: Any, rest: Any, call: Any) -> None:
+    await make_team(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: app.state.summary is not None and len(app.state.summary.members) == 2)
+        field = app.query_one(CommandInput)
+        await pilot.press(*"/role co", "tab")
+        assert field.value == "/role codex "
+        await pilot.press(*"lea", "tab")
+        assert field.value == "/role codex lead"
+        field.value = ""
+        await pilot.press(*"/role cl", "tab")
+        assert field.value == "/role claude/main "
+        await pilot.press("tab")
+        assert "writer" in app.status_text
+        assert "observer" in app.status_text
+
+
+@pytest.mark.anyio
+async def test_close_asks_for_confirmation_and_cancel_keeps_the_room_open(make_app: Any, rest: Any) -> None:
+    await make_room(rest)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["r1"])
+        await submit(pilot, app, "/room r1")
+        await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.mode == "confirm")
+        assert "r1" in app.status_text
+        await submit(pilot, app, "nope")
+        await until(pilot, lambda: app.mode == "normal")
+        room = await server_room(rest)
+        assert room is not None
+        assert room["status"] == "active"
+
+        await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.mode == "confirm")
+        await pilot.press("escape")
+        await until(pilot, lambda: app.mode == "normal")
+        room = await server_room(rest)
+        assert room is not None
+        assert room["status"] == "active"
+
+        await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.mode == "confirm")
+        await submit(pilot, app, "r1")
+        await until(pilot, lambda: app.state.summary is not None and app.state.summary.status == "closed")
+        room = await server_room(rest)
+        assert room is not None
+        assert room["status"] == "closed"
+
+
+@pytest.mark.anyio
+async def test_close_without_a_room_does_not_ask(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.status_is_error)
+        assert app.mode == "normal"

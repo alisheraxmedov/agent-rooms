@@ -63,12 +63,15 @@ def room_line(room: Summary, *, selected: bool, width: int) -> Content:
 
 def member_content(member: Member) -> Content:
     dot, state = ("●", "listening") if member.listening else ("○", "not listening")
+    is_lead = member.role == "lead"
+    role = ("★ lead" if is_lead else member.role, "bold $accent" if is_lead else "dim")
     return Content.assemble(
         (dot, "$success" if member.listening else "dim"),
         " ",
         (member.name, "bold"),
         "\n  ",
-        (f"{member.role} · {state}", "dim"),
+        role,
+        (f" · {state}", "dim"),
     )
 
 

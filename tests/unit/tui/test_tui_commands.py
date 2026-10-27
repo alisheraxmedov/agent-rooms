@@ -11,6 +11,7 @@ from agent_rooms.tui.commands import (
     Quit,
     Room,
     Say,
+    SetRole,
     SetStatus,
     Task,
     parse,
@@ -47,6 +48,9 @@ def test_double_slash_posts_a_literal_leading_slash() -> None:
         ("/room auth-refactor", Room("auth-refactor")),
         ("/task fix the login bug", Task("fix the login bug")),
         ("/new auth-refactor Move auth to OIDC", New("auth-refactor", "Move auth to OIDC")),
+        ("/role claude reviewer", SetRole("claude", "reviewer")),
+        ("/role claude/main lead", SetRole("claude/main", "lead")),
+        ("/ROLE codex Observer", SetRole("codex", "observer")),
         ("/delete", Delete(None)),
         ("/delete old-room", Delete("old-room")),
     ],
@@ -90,6 +94,19 @@ def test_unknown_command_points_to_help() -> None:
     assert "/help" in result.message
 
 
+def test_role_targets_split_into_agent_and_alias() -> None:
+    assert (SetRole("claude/main", "lead").agent, SetRole("claude/main", "lead").alias) == ("claude", "main")
+    assert (SetRole("codex", "lead").agent, SetRole("codex", "lead").alias) == ("codex", "")
+
+
+def test_an_unknown_role_lists_the_valid_ones() -> None:
+    result = parse("/role claude boss")
+    assert isinstance(result, Invalid)
+    assert "boss" in result.message
+    for role in ("writer", "reviewer", "observer", "lead"):
+        assert role in result.message
+
+
 def test_command_table_covers_every_command_once() -> None:
     names = [spec.name for spec in COMMANDS]
     assert names == [
@@ -98,6 +115,7 @@ def test_command_table_covers_every_command_once() -> None:
         "room",
         "new",
         "task",
+        "role",
         "pause",
         "resume",
         "close",

@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import ClassVar
 
 from textual import events
@@ -22,6 +23,7 @@ from agent_rooms.tui.commands import (
     Quit,
     Room,
     Say,
+    SetRole,
     SetStatus,
     Task,
     complete,
@@ -42,6 +44,17 @@ NO_ROOM = "No room selected. Type /room <slug> to open one or /new <slug> <topic
 NARROW_WIDTH, TINY_WIDTH = 100, 70
 
 
+@dataclass(frozen=True, slots=True)
+class Confirmation:
+    """A pending action that waits for the user to type one of `answers` in the input line."""
+
+    title: str
+    placeholder: str
+    answers: tuple[str, ...]
+    run: Callable[[], Awaitable[None]]
+    cancelled: str
+
+
 class AgentRoomsApp(App[None]):
     CSS_PATH = "app.tcss"
     TITLE = "Agent Rooms"
@@ -58,7 +71,7 @@ class AgentRoomsApp(App[None]):
         self.state = ViewState()
         self.mode = NORMAL
         self._poll_interval = poll_interval
-        self._pending_delete: str | None = None
+        self._confirmation: Confirmation | None = None
         self._refresh_lock = asyncio.Lock()
         self._action_lock = asyncio.Lock()
 
@@ -126,7 +139,11 @@ class AgentRoomsApp(App[None]):
         self.screen.set_class(width < TINY_WIDTH, "-tiny")
 
     def _complete(self, line: str) -> Completion | None:
-        return complete(line, self.state.slugs) if self.mode == NORMAL else None
+        if self.mode != NORMAL:
+            return None
+        summary = self.state.summary
+        members = [member.name for member in summary.members] if summary else []
+        return complete(line, self.state.slugs, members)
 
     # status line and connection
 
@@ -231,7 +248,7 @@ class AgentRoomsApp(App[None]):
 
     # input
 
-    def _enter_mode(self, mode: str, *, target: str = "") -> None:
+    def _enter_mode(self, mode: str, *, title: str = "", placeholder: str = "") -> None:
         self.mode = mode
         field, composer = self._input, self.query_one("#composer")
         field.password = mode == LOGIN
@@ -240,13 +257,13 @@ class AgentRoomsApp(App[None]):
         titles = {
             NORMAL: f"message {self.state.selected}" if self.state.selected else "no room selected",
             LOGIN: "sign in · token is hidden · Esc cancels",
-            CONFIRM: f"delete {target} · type its slug to confirm · Esc cancels",
+            CONFIRM: f"{title} · Esc cancels",
         }
         composer.border_title = Content(titles[mode])
         field.placeholder = {
             NORMAL: "Message the room, or type / for commands",
             LOGIN: "Paste the human token",
-            CONFIRM: "Type the room slug",
+            CONFIRM: placeholder,
         }[mode]
 
     def on_input_submitted(self, event: CommandInput.Submitted) -> None:
@@ -268,7 +285,7 @@ class AgentRoomsApp(App[None]):
 
     def action_cancel(self) -> None:
         if self.mode != NORMAL:
-            self._pending_delete = None
+            self._confirmation = None
             self._enter_mode(NORMAL)
             self._hint()
         else:
@@ -291,6 +308,17 @@ class AgentRoomsApp(App[None]):
             return None
         self._back_online()
         return result
+
+    async def _handle_admin(self, command: SetStatus | SetRole | Delete) -> None:
+        match command:
+            case SetStatus("closed"):
+                self._ask_close()
+            case SetStatus(status):
+                await self._set_status(status)
+            case SetRole():
+                await self._role(command)
+            case Delete(slug):
+                self._ask_delete(slug)
 
     async def _succeeded(self, operation: Awaitable[object]) -> bool:
         async def run() -> bool:
@@ -316,10 +344,8 @@ class AgentRoomsApp(App[None]):
                 await self._switch(slug)
             case New(slug, topic):
                 await self._create(slug, topic)
-            case SetStatus(status):
-                await self._set_status(status)
-            case Delete(slug):
-                self._ask_delete(slug)
+            case SetStatus() | SetRole() | Delete() as admin:
+                await self._handle_admin(admin)
             case Help():
                 await self.push_screen(HelpScreen())
             case Quit():
@@ -354,8 +380,8 @@ class AgentRoomsApp(App[None]):
             await self._select(summary.slug)
             self._info(f"Created room {summary.slug}.")
 
-    async def _set_status(self, status: str) -> None:
-        slug = self.state.selected
+    async def _set_status(self, status: str, slug: str | None = None) -> None:
+        slug = slug or self.state.selected
         if slug is None:
             self._error(NO_ROOM)
             return
@@ -366,6 +392,27 @@ class AgentRoomsApp(App[None]):
             self._render_room()
             self._info(f"Room {slug} is now {summary.status}.")
             self._refresh_now()
+
+    def _ask(self, confirmation: Confirmation, prompt: str) -> None:
+        self._confirmation = confirmation
+        self._enter_mode(CONFIRM, title=confirmation.title, placeholder=confirmation.placeholder)
+        self._info(prompt)
+
+    def _ask_close(self) -> None:
+        slug = self.state.selected
+        if slug is None:
+            self._error(NO_ROOM)
+            return
+        self._ask(
+            Confirmation(
+                title=f"close {slug} · type yes or its slug",
+                placeholder="Type yes or the room slug",
+                answers=("yes", slug),
+                run=lambda: self._set_status("closed", slug),
+                cancelled="Close cancelled.",
+            ),
+            f"Close {slug}? Agents can no longer post. Type yes or {slug} and press Enter.",
+        )
 
     def _ask_delete(self, slug: str | None) -> None:
         target = slug or self.state.selected
@@ -380,24 +427,66 @@ class AgentRoomsApp(App[None]):
                 f"Room {target} is {known.status}. Only closed rooms can be deleted; type /close first."
             )
         else:
-            self._pending_delete = target
-            self._enter_mode(CONFIRM, target=target)
-            self._info(f"This deletes {target} and all its messages for good. Type {target} and press Enter.")
+            self._ask(
+                Confirmation(
+                    title=f"delete {target} · type its slug",
+                    placeholder="Type the room slug",
+                    answers=(target,),
+                    run=lambda: self._delete(target),
+                    cancelled="Delete cancelled.",
+                ),
+                f"This deletes {target} and all its messages for good. Type {target} and press Enter.",
+            )
+
+    async def _delete(self, target: str) -> None:
+        if not await self._succeeded(self.api.delete_room(target)):
+            return
+        self.state.remove_room(target)
+        self._render_all()
+        if self.state.selected is None:
+            await self._pane.reset("Select a room with /room <slug>.")
+        self._enter_mode(NORMAL)
+        self._info(f"Deleted room {target}.")
+
+    async def _role(self, change: SetRole) -> None:
+        slug = self.state.selected
+        if slug is None:
+            self._error(NO_ROOM)
+            return
+        if change.role != "lead":
+            await self._assign_role(slug, change)
+            return
+        members = self.state.summary.members if self.state.summary else ()
+        current = next((m.name for m in members if m.role == "lead" and m.name != change.member), None)
+        demotion = f" {current} becomes an observer." if current else ""
+        self._ask(
+            Confirmation(
+                title=f"make {change.member} lead · type yes",
+                placeholder="Type yes to confirm",
+                answers=("yes",),
+                run=lambda: self._assign_role(slug, change),
+                cancelled="Role change cancelled.",
+            ),
+            f"Make {change.member} the lead of {slug}?{demotion} Type yes and press Enter.",
+        )
+
+    async def _assign_role(self, slug: str, change: SetRole) -> None:
+        summary = await self._attempt(self.api.set_role(slug, change.agent, change.alias, change.role))
+        if summary is None:
+            return
+        self.state.upsert_room(summary)
+        self._render_rooms()
+        self._render_room()
+        self._info(f"{change.member} is now {change.role} in {slug}.")
+        self._refresh_now()
 
     async def _handle_confirmation(self, value: str) -> None:
-        target, self._pending_delete = self._pending_delete, None
-        confirmed = target is not None and value.strip() == target
-        deleted = target is not None and confirmed and await self._succeeded(self.api.delete_room(target))
-        if deleted and target is not None:
-            self.state.remove_room(target)
-            self._render_all()
-            if self.state.selected is None:
-                await self._pane.reset("Select a room with /room <slug>.")
+        pending, self._confirmation = self._confirmation, None
         self._enter_mode(NORMAL)
-        if deleted:
-            self._info(f"Deleted room {target}.")
-        elif not confirmed:
-            self._info("Delete cancelled.")
+        if pending is None or value.strip().lower() not in {answer.lower() for answer in pending.answers}:
+            self._info(pending.cancelled if pending else "Cancelled.")
+            return
+        await pending.run()
 
     async def _handle_token(self, value: str) -> None:
         token = value.strip()

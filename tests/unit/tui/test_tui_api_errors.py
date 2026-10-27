@@ -156,16 +156,19 @@ async def test_requests_use_the_documented_paths_and_bodies() -> None:
     await api.post("r1", "hi", "task")
     await api.set_status("r1", "paused")
     await api.delete_room("r1")
+    await api.set_role("r1", "claude", "main", "lead")
     assert [(m, p) for m, p, _ in seen] == [
         ("POST", "/api/rooms"),
         ("GET", "/api/rooms/r1/messages?after=5&limit=50"),
         ("POST", "/api/rooms/r1/messages"),
         ("POST", "/api/rooms/r1/status"),
         ("DELETE", "/api/rooms/r1"),
+        ("POST", "/api/rooms/r1/members/role"),
     ]
     assert json.loads(seen[0][2]) == {"slug": "r1", "topic": "Topic"}
     assert json.loads(seen[2][2]) == {"text": "hi", "kind": "task"}
     assert json.loads(seen[3][2]) == {"status": "paused"}
+    assert json.loads(seen[5][2]) == {"agent": "claude", "alias": "main", "role": "lead"}
 
 
 @pytest.mark.anyio

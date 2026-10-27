@@ -87,6 +87,14 @@ def test_member_lines_show_name_role_and_listening_state() -> None:
     assert idle.plain == "○ codex\n  reviewer · not listening"
 
 
+def test_the_lead_is_marked_and_styled_apart_from_other_roles() -> None:
+    lead = member_content(Member("claude", "main", "lead", True))
+    writer = member_content(Member("claude", "main", "writer", True))
+    assert lead.plain == "● claude/main\n  ★ lead · listening"
+    lead_styles = {str(span.style) for span in lead.spans}
+    assert lead_styles - {str(span.style) for span in writer.spans}
+
+
 def test_the_room_header_has_slug_status_and_topic_without_markup() -> None:
     content = header_content(
         Summary("alpha", "[red]topic[/]", "paused", 60, 0, (), "2026-10-27T10:00:00.000Z")
