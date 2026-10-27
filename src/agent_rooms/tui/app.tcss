@@ -1,11 +1,6 @@
 Screen {
-    layers: base overlay;
     layout: vertical;
     background: $background;
-}
-
-#topbar, #body, #status, #composer {
-    layer: base;
 }
 
 #topbar {
@@ -41,6 +36,10 @@ Screen {
 }
 #main {
     width: 1fr;
+    layers: base overlay;
+}
+#room-header, #thread-pane, #status, #composer {
+    layer: base;
 }
 #room-header {
     height: auto;
@@ -51,6 +50,7 @@ Screen {
 
 #thread-pane {
     height: 1fr;
+    margin: 0 0 2 0;
 }
 #thread {
     height: 1fr;
@@ -70,12 +70,9 @@ MessageView {
     padding: 0 1;
     border-left: tall $panel-lighten-2;
 }
-MessageView.kind-task { border-left: tall $accent; }
-MessageView.kind-review_request { border-left: tall $secondary; }
-MessageView.kind-changes_requested { border-left: tall $warning; }
-MessageView.kind-approved { border-left: tall $success; }
-MessageView.kind-done { border-left: tall $primary; }
-MessageView.kind-system { border-left: tall $panel-lighten-1; color: $text-muted; }
+MessageView.kind-system {
+    color: $text-muted;
+}
 #new-indicator {
     dock: bottom;
     width: auto;

@@ -1,12 +1,15 @@
 from textual.content import Content
+from textual.widget import Widget
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
 from agent_rooms.tui.suggest import Suggestion
 
 MAX_ROWS = 8
-CHROME = 8  # screen margin, border, option padding and scrollbar around the text
+CHROME = 5  # border, option padding and scrollbar around the text
 GAP = "  "
+MAX_DESCRIPTION = 40
+MIN_HINT = 8
 
 
 def _shape_of(items: list[Suggestion]) -> tuple[str, int]:
@@ -66,18 +69,21 @@ class SuggestionPopup(OptionList, can_focus=False):
             self._draw(self.highlighted or 0)
 
     def _row(self, item: Suggestion, room: int) -> Content:
-        name_width, hint_width = self._widths
+        name_width, widest_hint = self._widths
+        wanted = min(max(len(row.description) for row in self.items), MAX_DESCRIPTION)
+        hint_width = min(widest_hint, max(room - name_width - 2 * len(GAP) - wanted, MIN_HINT))
         used = name_width + len(GAP) + hint_width + len(GAP)
         return Content.assemble(
             (item.name.ljust(name_width), "bold $accent"),
             GAP,
-            (item.hint.ljust(hint_width), "dim"),
+            (_fit(item.hint, hint_width).ljust(hint_width), "dim"),
             GAP,
             _fit(item.description, max(room - used, 0)),
         )
 
     def _draw(self, selected: int) -> None:
-        room = max(self.app.size.width - CHROME, 20)
+        column = self.parent.size.width if isinstance(self.parent, Widget) else 0
+        room = max((column or self.app.size.width) - CHROME, 20)
         self.clear_options()
         self.add_options(Option(self._row(item, room)) for item in self.items)
         self.highlighted = selected

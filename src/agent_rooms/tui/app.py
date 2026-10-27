@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import ClassVar
@@ -9,9 +10,11 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.widgets import Static
+from textual.widgets.input import Selection
 from textual.worker import Worker
 
 from agent_rooms.tui.api import HISTORY_PAGE, ApiError, RoomsApi
+from agent_rooms.tui.clipboard import Clipboard, SystemClipboard
 from agent_rooms.tui.commands import (
     Delete,
     Help,
@@ -60,14 +63,26 @@ class AgentRoomsApp(App[None]):
     TITLE = "Agent Rooms"
     ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
+        Binding("ctrl+c", "copy_or_quit", "Copy / quit", priority=True, show=False),
+        Binding("super+c", "copy", "Copy", priority=True, show=False),
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
-    def __init__(self, api: RoomsApi, store: TokenStore, *, poll_interval: float = 2.0) -> None:
+    quit_window_s = 2.0
+
+    def __init__(
+        self,
+        api: RoomsApi,
+        store: TokenStore,
+        *,
+        poll_interval: float = 2.0,
+        clipboard: Clipboard | None = None,
+    ) -> None:
         super().__init__()
         self.api = api
         self.store = store
+        self.system_clipboard: Clipboard = clipboard or SystemClipboard()
+        self._quit_armed_until = 0.0
         self.state = ViewState()
         self.mode = NORMAL
         self._poll_interval = poll_interval
@@ -90,14 +105,14 @@ class AgentRoomsApp(App[None]):
             with Vertical(id="main"):
                 yield RoomHeader(id="room-header")
                 yield ThreadPane(id="thread-pane")
+                yield StatusLine(id="status")
+                with Horizontal(id="composer"):
+                    yield Static("\u203a", id="prompt")
+                    yield CommandInput(id="input")
+                yield SuggestionPopup(id="palette")
             with Vertical(id="members-pane"):
                 yield Static("MEMBERS", classes="pane-title")
                 yield MembersPanel(id="members")
-        yield StatusLine(id="status")
-        with Horizontal(id="composer"):
-            yield Static("\u203a", id="prompt")
-            yield CommandInput(id="input")
-        yield SuggestionPopup(id="palette")
 
     @property
     def status_text(self) -> str:
@@ -117,6 +132,7 @@ class AgentRoomsApp(App[None]):
 
     async def on_mount(self) -> None:
         self._input.palette = self.query_one(SuggestionPopup)
+        self._input.paste_source = self.system_clipboard.read
         self._input.focus()
         self._enter_mode(NORMAL)
         self._apply_width(self.size.width)
@@ -308,6 +324,34 @@ class AgentRoomsApp(App[None]):
             self._hint()
         else:
             self._input.value = ""
+
+    def _selected_text(self) -> str:
+        return self.screen.get_selected_text() or self._input.selected_text
+
+    def _copy(self, text: str) -> None:
+        self.copy_to_clipboard(text)
+        stored = self.system_clipboard.write(text)
+        self.screen.clear_selection()
+        self._input.selection = Selection.cursor(self._input.cursor_position)
+        if stored:
+            self._status(f"Copied {len(text)} characters.", "ok")
+        else:
+            self._info(
+                f"Sent {len(text)} characters to the terminal clipboard; no system clipboard tool found."
+            )
+
+    def action_copy(self) -> None:
+        if text := self._selected_text():
+            self._copy(text)
+
+    def action_copy_or_quit(self) -> None:
+        if text := self._selected_text():
+            self._copy(text)
+        elif time.monotonic() < self._quit_armed_until:
+            self.exit()
+        else:
+            self._quit_armed_until = time.monotonic() + self.quit_window_s
+            self._info("Press Ctrl+C again to quit (Ctrl+Q or /quit quits at once).")
 
     def action_scroll_thread(self, direction: int) -> None:
         thread = self._pane.thread

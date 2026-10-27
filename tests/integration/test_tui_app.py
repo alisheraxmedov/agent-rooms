@@ -3,12 +3,15 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from textual import events
+from textual.color import Color
 from textual.geometry import Region
 from textual.pilot import Pilot
 from textual.widget import Widget
 
 from agent_rooms.tui.api import RoomsApi
 from agent_rooms.tui.app import AgentRoomsApp
+from agent_rooms.tui.colors import sender_color
 from agent_rooms.tui.credentials import ACCOUNT, SERVICE, TokenStore
 from agent_rooms.tui.widgets.composer import CommandInput
 from agent_rooms.tui.widgets.palette import SuggestionPopup
@@ -31,14 +34,32 @@ def keys() -> MemoryKeyring:
     return MemoryKeyring()
 
 
+class FakeClipboard:
+    def __init__(self) -> None:
+        self.written: list[str] = []
+        self.contents: str | None = None
+
+    def write(self, text: str) -> bool:
+        self.written.append(text)
+        return True
+
+    def read(self) -> str | None:
+        return self.contents
+
+
 @pytest.fixture
-def make_app(live_server: Any, keys: MemoryKeyring) -> Callable[..., AgentRoomsApp]:
+def clip() -> FakeClipboard:
+    return FakeClipboard()
+
+
+@pytest.fixture
+def make_app(live_server: Any, keys: MemoryKeyring, clip: FakeClipboard) -> Callable[..., AgentRoomsApp]:
     def _make(token: str | None = HUMAN_TOKEN, url: str | None = None) -> AgentRoomsApp:
         if token:
             keys.set_password(SERVICE, ACCOUNT, token)
         store = TokenStore(environ={}, backend=keys)
         api = RoomsApi(url or live_server.base_url, store.load())
-        return AgentRoomsApp(api, store, poll_interval=0.1)
+        return AgentRoomsApp(api, store, poll_interval=0.1, clipboard=clip)
 
     return _make
 
@@ -450,15 +471,39 @@ async def test_help_lists_every_command_and_closes_on_a_key(make_app: Any) -> No
 
 
 @pytest.mark.anyio
-async def test_quit_and_ctrl_c_exit(make_app: Any) -> None:
+async def test_quit_command_and_ctrl_q_exit_at_once(make_app: Any) -> None:
     app = make_app()
     async with app.run_test(size=SIZE) as pilot:
         await submit(pilot, app, "/quit")
         await until(pilot, lambda: not app.is_running)
     other = make_app()
     async with other.run_test(size=SIZE) as pilot:
-        await pilot.press("ctrl+c")
+        await pilot.press("ctrl+q")
         await until(pilot, lambda: not other.is_running)
+
+
+@pytest.mark.anyio
+async def test_ctrl_c_without_a_selection_asks_to_press_again_and_then_quits(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: "Ctrl+C again" in app.status_text)
+        assert app.is_running
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: not app.is_running)
+
+
+@pytest.mark.anyio
+async def test_a_second_ctrl_c_after_the_window_closes_does_not_quit(make_app: Any) -> None:
+    app = make_app()
+    app.quit_window_s = 0.05
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: "Ctrl+C again" in app.status_text)
+        await pilot.pause(0.15)
+        await pilot.press("ctrl+c")
+        await pilot.pause(0.1)
+        assert app.is_running
 
 
 @pytest.mark.anyio
@@ -736,6 +781,7 @@ async def test_typing_a_slash_shows_every_command_above_the_input_without_moving
         await until(pilot, lambda: popup_names(app) == COMMAND_NAMES)
         popup = popup_of(app)
         assert popup.region.bottom == composer.y
+        assert (popup.region.x, popup.region.right) == (composer.x, composer.right)
         assert app.query_one("#body").region == body
         assert app.query_one("#composer").region == composer
         text = rendered(popup)
@@ -1023,3 +1069,348 @@ async def test_the_popup_follows_new_rooms_arriving_while_it_is_open(make_app: A
         await until(pilot, lambda: popup_names(app) == ["first"])
         await make_room(rest, "second")
         await until(pilot, lambda: sorted(popup_names(app)) == ["first", "second"])
+
+
+async def make_conversation(rest: Any, call: Any) -> None:
+    await make_room(rest, "alpha", "Pair work")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("codex", "join_room", room="alpha", role="reviewer")
+    await call("opencode", "join_room", room="alpha", role="observer")
+    await call("claude", "post", room="alpha", text="from claude")
+    await call("codex", "post", room="alpha", text="from codex")
+    await call("opencode", "post", room="alpha", text="from opencode")
+    await rest("human", "POST", "/api/rooms/alpha/messages", json={"text": "from human"})
+    await rest(
+        "human",
+        "POST",
+        "/api/rooms/alpha/members/role",
+        json={"agent": "opencode", "alias": "", "role": "reviewer"},
+    )
+
+
+def style_of(widget: Widget, text: str) -> Any:
+    size = widget.outer_size
+    for strip in widget.render_lines(Region(0, 0, size.width, max(size.height, 1))):
+        for segment in strip:
+            if text in segment.text and segment.style is not None:
+                return segment.style
+    raise AssertionError(f"{text!r} is not drawn in {widget!r}")
+
+
+def rgb(color: Any) -> tuple[int, int, int]:
+    triplet = color.get_truecolor()
+    return (triplet.red, triplet.green, triplet.blue)
+
+
+def expected_rgb(name: str) -> tuple[int, int, int]:
+    return Color.parse(sender_color(name)).rgb
+
+
+async def open_conversation(app: AgentRoomsApp, pilot: Pilot[None]) -> None:
+    await until(pilot, lambda: app.state.slugs == ["alpha"])
+    await submit(pilot, app, "/room alpha")
+    await until(pilot, lambda: "observer → reviewer" in thread_text(app))
+
+
+def view_for(app: AgentRoomsApp, sender: str) -> MessageView:
+    return next(view for view in app.query(MessageView) if view.message.sender == sender)
+
+
+@pytest.mark.anyio
+async def test_message_headers_are_bold_and_coloured_per_sender(make_app: Any, rest: Any, call: Any) -> None:
+    await make_conversation(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await open_conversation(app, pilot)
+        seen = {}
+        for sender in ("claude", "codex", "opencode", "human", "system"):
+            view = view_for(app, sender)
+            style = style_of(view, sender)
+            assert rgb(style.color) == expected_rgb(sender), sender
+            assert style.bold, sender
+            seen[sender] = rgb(style.color)
+        assert len(set(seen.values())) == 5
+
+
+@pytest.mark.anyio
+async def test_the_left_bar_takes_the_senders_colour(make_app: Any, rest: Any, call: Any) -> None:
+    await make_conversation(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await open_conversation(app, pilot)
+        for sender in ("claude", "codex", "opencode"):
+            kind, color = view_for(app, sender).styles.border_left
+            assert kind == "tall"
+            assert (color.r, color.g, color.b) == expected_rgb(sender)
+
+
+@pytest.mark.anyio
+async def test_the_body_keeps_the_default_colour_and_markup_stays_literal(
+    make_app: Any, rest: Any, call: Any
+) -> None:
+    await make_room(rest, "alpha")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("claude", "post", room="alpha", text="[bold red]x[/] plain")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: "[bold red]x[/] plain" in thread_text(app))
+        body = style_of(app.query_one(MessageView), "[bold red]x[/]")
+        header = style_of(app.query_one(MessageView), "claude")
+        assert rgb(body.color) != rgb(header.color)
+        assert not body.bold
+        assert body.bgcolor == header.bgcolor
+
+
+@pytest.mark.anyio
+async def test_the_kind_is_a_coloured_tag(make_app: Any, rest: Any, call: Any) -> None:
+    await make_room(rest, "alpha")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("claude", "post", room="alpha", text="please review", kind="review_request")
+    await call("claude", "post", room="alpha", text="just chatting")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: len(app.query(MessageView)) == 2)
+        review, chat = list(app.query(MessageView))
+        tag, plain = style_of(review, "review request"), style_of(chat, "chat")
+        assert tag.bgcolor is not None
+        assert tag.bgcolor != style_of(review, "please review").bgcolor
+        assert plain.bgcolor == style_of(chat, "just chatting").bgcolor
+
+
+@pytest.mark.anyio
+async def test_the_members_panel_uses_the_sender_colours(make_app: Any, rest: Any, call: Any) -> None:
+    await make_conversation(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await open_conversation(app, pilot)
+        members = app.query_one("#members")
+        for name in ("claude", "codex", "opencode"):
+            assert rgb(style_of(members, name).color) == expected_rgb(name), name
+
+
+@pytest.mark.anyio
+async def test_the_composer_sits_in_the_centre_column_with_a_gap_below_the_thread(
+    make_app: Any, rest: Any
+) -> None:
+    await make_room(rest)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["r1"])
+        await submit(pilot, app, "/room r1")
+        thread = app.query_one("#thread-pane").region
+        status, composer = app.query_one("#status").region, app.query_one("#composer").region
+        rooms, members = app.query_one("#rooms-pane").region, app.query_one("#members-pane").region
+        assert (composer.x, composer.right) == (thread.x, thread.right)
+        assert (status.x, status.right) == (thread.x, thread.right)
+        assert rooms.right <= composer.x
+        assert composer.right <= members.x
+        assert status.y - thread.bottom >= 2
+        assert composer.y - thread.bottom >= 2
+        assert composer.bottom == app.query_one("#main").region.bottom
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("width", "hidden"), [(90, ["#members-pane"]), (60, ["#members-pane", "#rooms-pane"])]
+)
+async def test_in_narrow_terminals_the_composer_spans_what_the_side_panels_leave(
+    make_app: Any, width: int, hidden: list[str]
+) -> None:
+    app = make_app()
+    async with app.run_test(size=(width, 24)) as pilot:
+        await pilot.pause(0.1)
+        for selector in hidden:
+            assert not app.query_one(selector).display
+        thread, composer = app.query_one("#thread-pane").region, app.query_one("#composer").region
+        assert (composer.x, composer.right) == (thread.x, thread.right)
+        if "#rooms-pane" in hidden:
+            assert composer.x == 0
+        if "#members-pane" in hidden:
+            assert composer.right == width
+
+
+@pytest.mark.anyio
+async def test_the_thread_ends_above_the_gap_and_the_last_message_stays_fully_visible(
+    make_app: Any, rest: Any
+) -> None:
+    await make_room(rest)
+    for index in range(30):
+        await rest("human", "POST", "/api/rooms/r1/messages", json={"text": f"line {index}\nsecond"})
+    app = make_app()
+    async with app.run_test(size=(100, 26)) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["r1"])
+        await submit(pilot, app, "/room r1")
+        thread = app.query_one("#thread")
+        await until(pilot, lambda: len(app.query(MessageView)) == 30)
+        await until(pilot, lambda: thread.scroll_y >= thread.max_scroll_y - 1 and thread.max_scroll_y > 0)
+        last = list(app.query(MessageView))[-1]
+        assert last.region.bottom <= thread.region.bottom
+        assert last.region.y >= thread.region.y
+        assert thread.region.bottom <= app.query_one("#status").region.y - 2
+        assert "line 29" in rendered(last)
+
+
+async def drag_select_first_message(app: AgentRoomsApp, pilot: Pilot[None]) -> None:
+    await pilot.click(MessageView, times=2)
+    await until(pilot, lambda: bool(app.screen.get_selected_text()))
+
+
+@pytest.mark.anyio
+async def test_a_double_click_selects_a_message_and_ctrl_c_copies_it(
+    make_app: Any, rest: Any, call: Any, clip: FakeClipboard
+) -> None:
+    await make_room(rest, "alpha")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("claude", "post", room="alpha", text="copy me [bold red]x[/]")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: len(app.query(MessageView)) == 1)
+        await drag_select_first_message(app, pilot)
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: bool(clip.written))
+        assert clip.written[0].endswith("copy me [bold red]x[/]")
+        assert "claude" in clip.written[0]
+        assert "Copied" in app.status_text
+        assert not app.status_is_error
+        assert app.is_running
+        assert not app.screen.get_selected_text()
+
+
+@pytest.mark.anyio
+async def test_cmd_c_copies_too_without_ever_quitting(
+    make_app: Any, rest: Any, call: Any, clip: FakeClipboard
+) -> None:
+    await make_room(rest, "alpha")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("claude", "post", room="alpha", text="hello")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: len(app.query(MessageView)) == 1)
+        await pilot.press("super+c")
+        await pilot.pause(0.1)
+        assert clip.written == []
+        assert app.is_running
+        await drag_select_first_message(app, pilot)
+        await pilot.press("super+c")
+        await until(pilot, lambda: bool(clip.written))
+        assert clip.written[0].endswith("hello")
+
+
+@pytest.mark.anyio
+async def test_dragging_with_the_mouse_selects_text(
+    make_app: Any, rest: Any, call: Any, clip: FakeClipboard
+) -> None:
+    await make_room(rest, "alpha")
+    await call("claude", "join_room", room="alpha", role="writer")
+    await call("claude", "post", room="alpha", text="first line of the message")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: len(app.query(MessageView)) == 1)
+        view = app.query_one(MessageView)
+        await pilot.mouse_down(view, offset=(2, 1))
+        await pilot.hover(view, offset=(12, 1))
+        await pilot.mouse_up(view, offset=(12, 1))
+        selected = app.screen.get_selected_text()
+        assert selected
+        assert selected in "first line of the message"
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: clip.written == [selected])
+
+
+@pytest.mark.anyio
+async def test_ctrl_c_copies_a_selection_made_in_the_input(make_app: Any, clip: FakeClipboard) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await pilot.press(*"some draft")
+        field.select_all()
+        await pilot.press("ctrl+c")
+        await until(pilot, lambda: clip.written == ["some draft"])
+        assert "Copied" in app.status_text
+        assert app.is_running
+
+
+@pytest.mark.anyio
+async def test_a_bracketed_paste_inserts_text_into_the_input(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await pilot.press(*"say: ")
+        app.post_message(events.Paste("hello world"))
+        await pilot.pause()
+        assert field.value == "say: hello world"
+        assert field.cursor_position == len("say: hello world")
+
+
+@pytest.mark.anyio
+async def test_a_multi_line_paste_is_joined_into_one_line(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        app.post_message(events.Paste("first line\n  second line  \r\n\n\tthird"))
+        await pilot.pause()
+        assert field.value == "first line second line third"
+
+
+@pytest.mark.anyio
+async def test_a_paste_replaces_the_selected_text_and_drops_terminal_escapes(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await pilot.press(*"old")
+        field.select_all()
+        app.post_message(events.Paste("new\x1b[2Jtext"))
+        await pilot.pause()
+        assert field.value == "new[2Jtext"
+
+
+@pytest.mark.anyio
+async def test_a_paste_into_the_masked_login_prompt_stays_masked(make_app: Any) -> None:
+    app = make_app(token=None)
+    async with app.run_test(size=SIZE) as pilot:
+        await submit(pilot, app, "/login")
+        await until(pilot, lambda: app.mode == "login")
+        app.post_message(events.Paste(HUMAN_TOKEN + "\n"))
+        await pilot.pause()
+        assert app.query_one(CommandInput).value == HUMAN_TOKEN
+        assert HUMAN_TOKEN not in screen_text(app)
+
+
+@pytest.mark.anyio
+async def test_ctrl_v_pastes_from_the_system_clipboard(make_app: Any, clip: FakeClipboard) -> None:
+    clip.contents = "from the clipboard\nsecond line"
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        assert app.query_one(CommandInput).value == "from the clipboard second line"
+
+
+@pytest.mark.anyio
+async def test_ctrl_v_with_an_empty_clipboard_does_nothing(make_app: Any, clip: FakeClipboard) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press(*"abc", "ctrl+v")
+        await pilot.pause()
+        assert app.query_one(CommandInput).value == "abc"
+
+
+@pytest.mark.anyio
+async def test_help_documents_copy_paste_and_quit(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await submit(pilot, app, "/help")
+        await until(pilot, lambda: len(app.screen_stack) > 1)
+        text = screen_text(app)
+        for needle in ("Ctrl+C", "Cmd+C", "Ctrl+V", "Ctrl+Q", "Option", "Shift"):
+            assert needle in text, needle

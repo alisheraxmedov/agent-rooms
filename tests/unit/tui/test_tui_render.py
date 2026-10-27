@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from textual.content import Content
 
 from agent_rooms.tui.api import Member, Message, Summary
+from agent_rooms.tui.colors import kind_tag_style, sender_color
 from agent_rooms.tui.render import (
     header_content,
     kind_class,
@@ -30,6 +31,43 @@ def message(**overrides: object) -> Message:
 
 def room(slug: str = "alpha", status: str = "active", count: int = 3) -> Summary:
     return Summary(slug, "Some topic", status, 60, count, (), "2026-10-27T10:00:00.000Z")
+
+
+def _style_of(content: Content, text: str) -> str:
+    start = content.plain.index(text)
+    return " ".join(str(span.style) for span in content.spans if span.start <= start < span.end)
+
+
+def test_the_sender_name_is_bold_and_in_the_senders_colour() -> None:
+    content = message_content(message(sender="codex", alias=None), NOW, UTC)
+    style = _style_of(content, "codex")
+    assert "bold" in style
+    assert sender_color("codex") in style
+
+
+def test_an_alias_shares_the_agents_colour() -> None:
+    content = message_content(message(sender="claude", alias="main"), NOW, UTC)
+    assert sender_color("claude") in _style_of(content, "claude")
+    assert sender_color("claude") in _style_of(content, "/main")
+
+
+def test_the_kind_is_a_coloured_tag_and_chat_stays_neutral() -> None:
+    review = message_content(message(kind="review_request"), NOW, UTC)
+    chat = message_content(message(kind="chat"), NOW, UTC)
+    assert kind_tag_style("review_request") in _style_of(review, "review request")
+    assert " on #" not in _style_of(chat, "chat")
+
+
+def test_id_and_time_are_dim() -> None:
+    content = message_content(message(), NOW, UTC)
+    assert "dim" in _style_of(content, "#7")
+    assert "dim" in _style_of(content, "10:05")
+
+
+def test_the_body_has_no_styling_at_all() -> None:
+    content = message_content(message(text="plain [bold]body[/bold]"), NOW, UTC)
+    body_start = content.plain.index("\n") + 1
+    assert all(span.end <= body_start for span in content.spans)
 
 
 def test_a_message_has_a_header_line_and_its_text() -> None:
@@ -93,6 +131,12 @@ def test_the_lead_is_marked_and_styled_apart_from_other_roles() -> None:
     assert lead.plain == "● claude/main\n  ★ lead · listening"
     lead_styles = {str(span.style) for span in lead.spans}
     assert lead_styles - {str(span.style) for span in writer.spans}
+
+
+def test_members_use_the_same_colours_as_senders() -> None:
+    content = member_content(Member("codex", None, "reviewer", False))
+    assert sender_color("codex") in _style_of(content, "codex")
+    assert "bold" in _style_of(content, "codex")
 
 
 def test_the_room_header_has_slug_status_and_topic_without_markup() -> None:

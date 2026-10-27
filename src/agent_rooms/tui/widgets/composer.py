@@ -1,20 +1,24 @@
+from collections.abc import Callable
 from typing import Any, ClassVar
 
+from textual import events
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.widgets import Input
 
 from agent_rooms.tui.state import InputHistory
+from agent_rooms.tui.text import clean
 from agent_rooms.tui.widgets.palette import SuggestionPopup
 
 
 class CommandInput(Input):
-    """The single input line: history on ↑/↓, completion on Tab, PgUp/PgDn scroll the thread."""
+    """The single input line: history, suggestions, paste, and PgUp/PgDn to scroll the thread."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("up", "recall_previous", show=False),
         Binding("down", "recall_next", show=False),
         Binding("tab", "complete", show=False),
+        Binding("super+v", "paste", show=False),
         Binding("pageup", "app.scroll_thread(-1)", show=False),
         Binding("pagedown", "app.scroll_thread(1)", show=False),
     ]
@@ -28,6 +32,7 @@ class CommandInput(Input):
         self.recall_enabled = True
         self.palette: SuggestionPopup | None = None
         self.quiet_value: str | None = None
+        self.paste_source: Callable[[], str | None] | None = None
 
     @property
     def _palette_open(self) -> bool:
@@ -67,3 +72,19 @@ class CommandInput(Input):
             self._replace(item.insert)
             return
         await super().action_submit()
+
+    def insert_pasted(self, text: str) -> None:
+        """Insert pasted text at the cursor; a multi-line paste becomes one line joined with spaces."""
+        line = " ".join(part.strip() for part in clean(text).split("\n") if part.strip())
+        if line:
+            start, end = self.selection
+            self.replace(line, start, end)
+
+    def _on_paste(self, event: events.Paste) -> None:
+        event.prevent_default()
+        event.stop()
+        self.insert_pasted(event.text)
+
+    def action_paste(self) -> None:
+        text = self.paste_source() if self.paste_source else None
+        self.insert_pasted(text or self.app.clipboard)

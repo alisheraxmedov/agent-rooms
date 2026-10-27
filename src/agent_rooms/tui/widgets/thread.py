@@ -1,12 +1,14 @@
 import asyncio
 
 from textual.app import ComposeResult
+from textual.color import Color
 from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
 from textual.message import Message as TextualMessage
 from textual.widgets import Static
 
 from agent_rooms.tui.api import Message
+from agent_rooms.tui.colors import sender_color
 from agent_rooms.tui.render import kind_class, message_content
 
 
@@ -14,6 +16,7 @@ class MessageView(Static):
     def __init__(self, message: Message) -> None:
         super().__init__(message_content(message), markup=False, classes=kind_class(message.kind))
         self.message = message
+        self.styles.border_left = ("tall", Color.parse(sender_color(message.sender)))
 
 
 class Thread(VerticalScroll, can_focus=False):
