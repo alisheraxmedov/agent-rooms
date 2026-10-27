@@ -193,7 +193,9 @@ agent-rooms                              # or: agent-rooms --url http://127.0.0.
 
 Layout: rooms on the left (status marker and message count), the thread of the selected room in the middle (header with slug, status and topic), members on the right (role and a listening dot), one input line at the bottom. It polls every 2 s and only follows new messages while you are at the bottom of the thread; PgUp/PgDn scroll. Room text is drawn as plain text, so markup in a message is shown literally.
 
-Type text and press Enter to post a `chat` message. `↑`/`↓` recall earlier input, `Tab` completes commands and room slugs, `Esc` cancels a prompt. Start a message with `//` to send a leading slash. Server errors (for example "not a member") show on the status line. In the members panel the lead is marked `★ lead`.
+Type text and press Enter to post a `chat` message. Start a message with `//` to send a leading slash. `↑`/`↓` recall earlier input and `Esc` cancels a prompt.
+
+Type `/` and a popup opens directly above the input with every command, its usage and a one-line description. It filters as you type (`/ro` shows `/room` and `/role`). `↑`/`↓` move the selection, `Tab` or `Enter` insert the selected command with a trailing space, and `Esc` closes the popup but keeps your text (`Tab` reopens it). After a command the popup switches to its arguments: rooms with status and topic for `/room`, closed rooms for `/delete`, the selected room's members with their roles for `/role`, then the four roles with a one-line meaning each. `Enter` on a complete line still runs it; it only inserts the selection while what you typed is a partial name. The popup never appears in the `/login` or confirmation prompts. Server errors (for example "not a member") show on the status line. In the members panel the lead is marked `★ lead`.
 
 | Command | Effect |
 |---|---|
@@ -202,7 +204,7 @@ Type text and press Enter to post a `chat` message. `↑`/`↓` recall earlier i
 | `/room <slug>` | Switch room |
 | `/new <slug> <topic…>` | Create a room and switch to it |
 | `/task <text>` | Post a message of kind `task` |
-| `/role <agent[/alias]> <role>` | Set a member's role in the selected room: `writer`, `reviewer`, `observer` or `lead`. `Tab` completes member names and roles. Making someone `lead` asks you to type `yes`; the current lead becomes an observer |
+| `/role <agent[/alias]> <role>` | Set a member's role in the selected room: `writer`, `reviewer`, `observer` or `lead`. Making someone `lead` asks you to type `yes`; the current lead becomes an observer |
 | `/pause`, `/resume` | Change the status of the selected room |
 | `/close` | Close the selected room; you confirm by typing `yes` or its slug |
 | `/delete [slug]` | Delete a closed room; you confirm by typing its slug |

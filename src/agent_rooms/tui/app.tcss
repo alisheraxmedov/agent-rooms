@@ -1,6 +1,11 @@
 Screen {
+    layers: base overlay;
     layout: vertical;
     background: $background;
+}
+
+#topbar, #body, #status, #composer {
+    layer: base;
 }
 
 #topbar {
@@ -117,3 +122,26 @@ CommandInput:focus {
 
 Screen.-narrow #members-pane { display: none; }
 Screen.-tiny #rooms-pane { display: none; }
+
+SuggestionPopup {
+    layer: overlay;
+    dock: bottom;
+    width: 1fr;
+    height: auto;
+    margin: 0 0 3 0;
+    padding: 0;
+    border: round $primary;
+    background: $surface;
+    scrollbar-size-vertical: 1;
+}
+SuggestionPopup > .option-list--option {
+    padding: 0 1;
+}
+SuggestionPopup > .option-list--option-highlighted {
+    background: $primary 35%;
+    text-style: none;
+}
+SuggestionPopup:focus > .option-list--option-highlighted {
+    background: $primary 35%;
+    text-style: none;
+}

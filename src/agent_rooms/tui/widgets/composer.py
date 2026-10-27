@@ -1,12 +1,11 @@
-from collections.abc import Callable
 from typing import Any, ClassVar
 
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.widgets import Input
 
-from agent_rooms.tui.commands import Completion
 from agent_rooms.tui.state import InputHistory
+from agent_rooms.tui.widgets.palette import SuggestionPopup
 
 
 class CommandInput(Input):
@@ -20,33 +19,51 @@ class CommandInput(Input):
         Binding("pagedown", "app.scroll_thread(1)", show=False),
     ]
 
-    class Hint(Message):
-        def __init__(self, text: str) -> None:
-            super().__init__()
-            self.text = text
+    class Refresh(Message):
+        """Asks the app to recompute the suggestions for the current text."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.history = InputHistory()
         self.recall_enabled = True
-        self.completer: Callable[[str], Completion | None] | None = None
+        self.palette: SuggestionPopup | None = None
+        self.quiet_value: str | None = None
+
+    @property
+    def _palette_open(self) -> bool:
+        return self.palette is not None and self.palette.display
 
     def _replace(self, value: str) -> None:
         self.value = value
         self.cursor_position = len(value)
 
+    def _recall(self, entry: str) -> None:
+        self.quiet_value = entry
+        self._replace(entry)
+
     def action_recall_previous(self) -> None:
-        if self.recall_enabled and (entry := self.history.previous(self.value)) is not None:
-            self._replace(entry)
+        if self.palette is not None and self._palette_open:
+            self.palette.move(-1)
+        elif self.recall_enabled and (entry := self.history.previous(self.value)) is not None:
+            self._recall(entry)
 
     def action_recall_next(self) -> None:
-        if self.recall_enabled and (entry := self.history.following()) is not None:
-            self._replace(entry)
+        if self.palette is not None and self._palette_open:
+            self.palette.move(1)
+        elif self.recall_enabled and (entry := self.history.following()) is not None:
+            self._recall(entry)
 
     def action_complete(self) -> None:
-        completion = self.completer(self.value) if self.completer else None
-        if completion is None:
+        item = self.palette.selected_item if self.palette is not None else None
+        if item is not None:
+            self._replace(item.insert)
+        elif self.recall_enabled and self.value.startswith("/"):
+            self.quiet_value = None
+            self.post_message(self.Refresh())
+
+    async def action_submit(self) -> None:
+        item = self.palette.selected_item if self.palette is not None else None
+        if item is not None and not item.is_typed(self.value):
+            self._replace(item.insert)
             return
-        self._replace(completion.line)
-        if completion.options:
-            self.post_message(self.Hint("  ".join(completion.options)))
+        await super().action_submit()

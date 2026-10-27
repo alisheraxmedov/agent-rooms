@@ -11,10 +11,10 @@ from agent_rooms.tui.commands import COMMANDS
 
 KEYS = (
     ("Enter", "send the line"),
-    ("↑ / ↓", "recall earlier input"),
-    ("Tab", "complete a command or room"),
+    ("↑ / ↓", "recall earlier input; pick a suggestion"),
+    ("Tab", "insert the selected suggestion"),
     ("PgUp / PgDn", "scroll the thread"),
-    ("Esc", "cancel a prompt"),
+    ("Esc", "close suggestions; cancel a prompt"),
     ("Ctrl+C", "quit"),
 )
 
@@ -23,11 +23,13 @@ def help_content() -> Content:
     width = max(len(spec.usage) for spec in COMMANDS)
     parts: list[str | tuple[str, str]] = [("Commands\n", "bold")]
     for spec in COMMANDS:
-        parts += [(spec.usage.ljust(width + 2), "$primary"), spec.summary, "\n"]
+        parts += [(spec.usage.ljust(width + 2), "$primary"), spec.description, "\n"]
     parts += [("\nKeys\n", "bold")]
     for key, meaning in KEYS:
         parts += [(key.ljust(width + 2), "$primary"), meaning, "\n"]
-    parts += [("\nPlain text posts a chat message; start with // to send a leading slash.", "dim")]
+    parts += [
+        ("\nType / to see the commands. Plain text posts a chat message; // sends a leading slash.", "dim")
+    ]
     return Content.assemble(*parts)
 
 

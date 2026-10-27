@@ -11,6 +11,7 @@ from agent_rooms.tui.api import RoomsApi
 from agent_rooms.tui.app import AgentRoomsApp
 from agent_rooms.tui.credentials import ACCOUNT, SERVICE, TokenStore
 from agent_rooms.tui.widgets.composer import CommandInput
+from agent_rooms.tui.widgets.palette import SuggestionPopup
 from agent_rooms.tui.widgets.thread import MessageView
 from keyring_fake import MemoryKeyring
 
@@ -403,7 +404,7 @@ async def test_up_and_down_recall_the_input_history(make_app: Any) -> None:
 
 
 @pytest.mark.anyio
-async def test_tab_completes_commands_and_room_slugs(make_app: Any, rest: Any) -> None:
+async def test_tab_inserts_the_selected_command_and_room_slug(make_app: Any, rest: Any) -> None:
     await make_room(rest, "auth-refactor")
     await make_room(rest, "auth-docs")
     await make_room(rest, "billing")
@@ -417,9 +418,7 @@ async def test_tab_completes_commands_and_room_slugs(make_app: Any, rest: Any) -
         assert field.value == "/room billing"
         field.value = ""
         await pilot.press(*"/room au", "tab")
-        assert field.value == "/room auth-"
-        assert "auth-docs" in app.status_text
-        assert "auth-refactor" in app.status_text
+        assert field.value == "/room " + next(slug for slug in app.state.slugs if slug.startswith("auth"))
         assert app.focused is field
 
 
@@ -635,7 +634,7 @@ async def test_role_needs_a_selected_room_and_valid_arguments(make_app: Any) -> 
 
 
 @pytest.mark.anyio
-async def test_tab_completes_member_names_and_roles(make_app: Any, rest: Any, call: Any) -> None:
+async def test_tab_inserts_member_names_and_roles(make_app: Any, rest: Any, call: Any) -> None:
     await make_team(rest, call)
     app = make_app()
     async with app.run_test(size=SIZE) as pilot:
@@ -650,9 +649,7 @@ async def test_tab_completes_member_names_and_roles(make_app: Any, rest: Any, ca
         field.value = ""
         await pilot.press(*"/role cl", "tab")
         assert field.value == "/role claude/main "
-        await pilot.press("tab")
-        assert "writer" in app.status_text
-        assert "observer" in app.status_text
+        await until(pilot, lambda: popup_names(app) == ["writer", "reviewer", "observer", "lead"])
 
 
 @pytest.mark.anyio
@@ -695,3 +692,334 @@ async def test_close_without_a_room_does_not_ask(make_app: Any) -> None:
         await submit(pilot, app, "/close")
         await until(pilot, lambda: app.status_is_error)
         assert app.mode == "normal"
+
+
+def popup_of(app: AgentRoomsApp) -> SuggestionPopup:
+    return app.query_one(SuggestionPopup)
+
+
+def popup_names(app: AgentRoomsApp) -> list[str]:
+    popup = popup_of(app)
+    return [item.name for item in popup.items] if popup.display else []
+
+
+async def type_keys(pilot: Pilot[None], *keys: str) -> None:
+    await pilot.press(*keys)
+    await pilot.pause()
+
+
+COMMAND_NAMES = [
+    "/login",
+    "/logout",
+    "/room",
+    "/new",
+    "/task",
+    "/role",
+    "/pause",
+    "/resume",
+    "/close",
+    "/delete",
+    "/help",
+    "/quit",
+]
+
+
+@pytest.mark.anyio
+async def test_typing_a_slash_shows_every_command_above_the_input_without_moving_the_layout(
+    make_app: Any,
+) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        assert popup_names(app) == []
+        body, composer = app.query_one("#body").region, app.query_one("#composer").region
+        await type_keys(pilot, "/")
+        await until(pilot, lambda: popup_names(app) == COMMAND_NAMES)
+        popup = popup_of(app)
+        assert popup.region.bottom == composer.y
+        assert app.query_one("#body").region == body
+        assert app.query_one("#composer").region == composer
+        text = rendered(popup)
+        assert "/room" in text
+        assert "<slug>" in text
+        assert "Switch to another room" in text
+        assert "Sign in with the human token" in text
+        assert popup.highlighted == 0
+
+
+@pytest.mark.anyio
+async def test_the_popup_filters_by_prefix_as_you_type_and_hides_when_nothing_matches(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await type_keys(pilot, "/", "r")
+        await until(pilot, lambda: popup_names(app) == ["/room", "/role", "/resume"])
+        await type_keys(pilot, "o")
+        await until(pilot, lambda: popup_names(app) == ["/room", "/role"])
+        await type_keys(pilot, "x")
+        await until(pilot, lambda: not popup_of(app).display)
+        await type_keys(pilot, "backspace")
+        await until(pilot, lambda: popup_names(app) == ["/room", "/role"])
+        await type_keys(pilot, "backspace", "backspace", "backspace")
+        await until(pilot, lambda: not popup_of(app).display)
+
+
+@pytest.mark.anyio
+async def test_down_then_tab_inserts_the_selected_command_with_a_trailing_space(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await type_keys(pilot, *"/ro")
+        await until(pilot, lambda: popup_names(app) == ["/room", "/role"])
+        await type_keys(pilot, "down")
+        assert popup_of(app).highlighted == 1
+        await type_keys(pilot, "tab")
+        assert field.value == "/role "
+        assert app.focused is field
+
+
+@pytest.mark.anyio
+async def test_enter_inserts_the_selected_command_instead_of_running_a_partial_one(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await type_keys(pilot, *"/ro", "enter")
+        assert field.value == "/room "
+        assert app.mode == "normal"
+        assert not app.status_is_error
+        await pilot.pause(0.1)
+        assert app.status_text.startswith("Enter send")
+
+
+@pytest.mark.anyio
+async def test_enter_still_runs_a_complete_command(make_app: Any, rest: Any) -> None:
+    await make_room(rest)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["r1"])
+        await submit(pilot, app, "/room r1")
+        await until(pilot, lambda: app.state.selected == "r1")
+        await type_keys(pilot, *"/pause")
+        await until(pilot, lambda: popup_names(app) == ["/pause"])
+        await type_keys(pilot, "enter")
+        await until(pilot, lambda: app.state.summary is not None and app.state.summary.status == "paused")
+        assert app.query_one(CommandInput).value == ""
+        await until(pilot, lambda: not popup_of(app).display)
+
+
+@pytest.mark.anyio
+async def test_enter_on_a_command_that_needs_arguments_runs_it_as_before(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await type_keys(pilot, *"/room")
+        await until(pilot, lambda: popup_names(app) == ["/room"])
+        await type_keys(pilot, "enter")
+        await until(pilot, lambda: app.status_text.startswith("Usage: /room"))
+
+
+@pytest.mark.anyio
+async def test_escape_closes_the_popup_but_keeps_the_text_and_typing_reopens_it(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await type_keys(pilot, *"/ro")
+        await until(pilot, lambda: popup_of(app).display)
+        await type_keys(pilot, "escape")
+        await until(pilot, lambda: not popup_of(app).display)
+        assert field.value == "/ro"
+        await type_keys(pilot, "o")
+        await until(pilot, lambda: popup_names(app) == ["/room"])
+        await type_keys(pilot, "escape")
+        await until(pilot, lambda: not popup_of(app).display)
+        assert field.value == "/roo"
+        await type_keys(pilot, "tab")
+        await until(pilot, lambda: popup_names(app) == ["/room"])
+        assert field.value == "/roo"
+        await type_keys(pilot, "escape", "escape")
+        assert field.value == ""
+        assert not popup_of(app).display
+
+
+@pytest.mark.anyio
+async def test_up_and_down_move_the_selection_not_the_history_while_the_popup_is_open(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await submit(pilot, app, "/room nowhere")
+        await until(pilot, lambda: app.status_is_error)
+        await type_keys(pilot, "/")
+        await until(pilot, lambda: popup_of(app).display)
+        await type_keys(pilot, "down", "down", "down", "up")
+        assert popup_of(app).highlighted == 2
+        assert field.value == "/"
+        await type_keys(pilot, "up", "up", "up")
+        assert popup_of(app).highlighted == len(COMMAND_NAMES) - 1
+        assert field.value == "/"
+
+
+@pytest.mark.anyio
+async def test_up_recalls_history_when_the_popup_is_closed_and_does_not_reopen_it(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        field = app.query_one(CommandInput)
+        await submit(pilot, app, "/room nowhere")
+        await until(pilot, lambda: app.status_is_error)
+        await submit(pilot, app, "/room elsewhere")
+        await until(pilot, lambda: "elsewhere" in app.status_text)
+        await type_keys(pilot, "up")
+        assert field.value == "/room elsewhere"
+        assert not popup_of(app).display
+        await type_keys(pilot, "up")
+        assert field.value == "/room nowhere"
+        await type_keys(pilot, "down", "down")
+        assert field.value == ""
+        assert not popup_of(app).display
+
+
+@pytest.mark.anyio
+async def test_room_arguments_show_rooms_with_status_and_topic(make_app: Any, rest: Any) -> None:
+    await make_room(rest, "auth-refactor", "Move auth to OIDC")
+    await make_room(rest, "billing", "Stripe retries")
+    await rest("human", "POST", "/api/rooms/billing/status", json={"status": "paused"})
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: len(app.state.slugs) == 2)
+        await type_keys(pilot, *"/room ")
+        await until(pilot, lambda: sorted(popup_names(app)) == ["auth-refactor", "billing"])
+        text = rendered(popup_of(app))
+        assert "Move auth to OIDC" in text
+        assert "paused" in text
+        assert "active" in text
+        await type_keys(pilot, "b")
+        await until(pilot, lambda: popup_names(app) == ["billing"])
+        await type_keys(pilot, "enter")
+        assert app.query_one(CommandInput).value == "/room billing"
+        await type_keys(pilot, "enter")
+        await until(pilot, lambda: app.state.selected == "billing")
+
+
+@pytest.mark.anyio
+async def test_role_arguments_show_members_and_then_roles_with_meanings(
+    make_app: Any, rest: Any, call: Any
+) -> None:
+    await make_team(rest, call)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["alpha"])
+        await submit(pilot, app, "/room alpha")
+        await until(pilot, lambda: app.state.summary is not None and len(app.state.summary.members) == 2)
+        await type_keys(pilot, *"/role ")
+        await until(pilot, lambda: sorted(popup_names(app)) == ["claude/main", "codex"])
+        text = rendered(popup_of(app))
+        assert "writer" in text
+        assert "reviewer" in text
+        await type_keys(pilot, *"claude ")
+        await until(pilot, lambda: popup_names(app) == ["writer", "reviewer", "observer", "lead"])
+        text = rendered(popup_of(app))
+        assert "implements and requests review" in text
+        assert "reviews, never edits" in text
+        assert "reads only" in text
+        assert "assigns tasks and may post done" in text
+        await type_keys(pilot, "r")
+        await until(pilot, lambda: popup_names(app) == ["reviewer"])
+
+
+@pytest.mark.anyio
+async def test_delete_arguments_offer_only_closed_rooms(make_app: Any, rest: Any) -> None:
+    await make_room(rest, "live", "Still going")
+    await make_room(rest, "done-room", "Finished")
+    await rest("human", "POST", "/api/rooms/done-room/status", json={"status": "closed"})
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: len(app.state.slugs) == 2)
+        await type_keys(pilot, *"/delete ")
+        await until(pilot, lambda: popup_names(app) == ["done-room"])
+        assert "closed" in rendered(popup_of(app))
+
+
+@pytest.mark.anyio
+async def test_the_popup_hides_once_a_space_follows_a_free_text_command(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await type_keys(pilot, *"/new")
+        await until(pilot, lambda: popup_names(app) == ["/new"])
+        await type_keys(pilot, "space")
+        await until(pilot, lambda: not popup_of(app).display)
+        await type_keys(pilot, *"slug topic")
+        await pilot.pause(0.1)
+        assert not popup_of(app).display
+
+
+@pytest.mark.anyio
+async def test_the_popup_never_shows_in_the_login_prompt(make_app: Any) -> None:
+    app = make_app(token=None)
+    async with app.run_test(size=SIZE) as pilot:
+        await type_keys(pilot, *"/login")
+        await until(pilot, lambda: popup_names(app) == ["/login"])
+        await type_keys(pilot, "enter")
+        await until(pilot, lambda: app.mode == "login")
+        await until(pilot, lambda: not popup_of(app).display)
+        await type_keys(pilot, *"/room abc")
+        await pilot.pause(0.1)
+        assert not popup_of(app).display
+
+
+@pytest.mark.anyio
+async def test_the_popup_never_shows_in_a_confirmation_prompt(make_app: Any, rest: Any) -> None:
+    await make_room(rest)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["r1"])
+        await submit(pilot, app, "/room r1")
+        await submit(pilot, app, "/close")
+        await until(pilot, lambda: app.mode == "confirm")
+        await type_keys(pilot, "/", "r")
+        await pilot.pause(0.1)
+        assert not popup_of(app).display
+        await pilot.press("escape")
+        await until(pilot, lambda: app.mode == "normal")
+
+
+@pytest.mark.anyio
+async def test_the_popup_shows_at_most_eight_rows_and_scrolls_to_the_selection(make_app: Any) -> None:
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await type_keys(pilot, "/")
+        await until(pilot, lambda: popup_of(app).display)
+        popup = popup_of(app)
+        assert popup.region.height <= 8 + 2
+        for _ in range(10):
+            await pilot.press("down")
+        await pilot.pause()
+        assert popup.highlighted == 10
+        assert "/help" in rendered(popup)
+        assert popup.region.height <= 8 + 2
+
+
+@pytest.mark.anyio
+async def test_the_popup_fits_a_narrow_terminal(make_app: Any, rest: Any) -> None:
+    await make_room(rest, "auth-refactor", "A very long topic that cannot possibly fit in a narrow terminal")
+    app = make_app()
+    async with app.run_test(size=(50, 20)) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["auth-refactor"])
+        await type_keys(pilot, "/")
+        await until(pilot, lambda: popup_of(app).display)
+        assert popup_of(app).region.right <= 50
+        assert popup_of(app).region.x >= 0
+        app.query_one(CommandInput).value = ""
+        await type_keys(pilot, *"/room ")
+        await until(pilot, lambda: popup_names(app) == ["auth-refactor"])
+        text = rendered(popup_of(app))
+        assert "auth-refactor" in text
+        assert "…" in text
+        assert popup_of(app).region.right <= 50
+
+
+@pytest.mark.anyio
+async def test_the_popup_follows_new_rooms_arriving_while_it_is_open(make_app: Any, rest: Any) -> None:
+    await make_room(rest, "first")
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        await until(pilot, lambda: app.state.slugs == ["first"])
+        await type_keys(pilot, *"/room ")
+        await until(pilot, lambda: popup_names(app) == ["first"])
+        await make_room(rest, "second")
+        await until(pilot, lambda: sorted(popup_names(app)) == ["first", "second"])

@@ -123,4 +123,4 @@ def test_command_table_covers_every_command_once() -> None:
         "help",
         "quit",
     ]
-    assert all(spec.usage.startswith("/" + spec.name) and spec.summary for spec in COMMANDS)
+    assert all(spec.usage.startswith("/" + spec.name) and spec.description for spec in COMMANDS)

@@ -13,7 +13,6 @@ from textual.worker import Worker
 
 from agent_rooms.tui.api import HISTORY_PAGE, ApiError, RoomsApi
 from agent_rooms.tui.commands import (
-    Completion,
     Delete,
     Help,
     Invalid,
@@ -26,18 +25,19 @@ from agent_rooms.tui.commands import (
     SetRole,
     SetStatus,
     Task,
-    complete,
     parse,
 )
 from agent_rooms.tui.credentials import CredentialsError, TokenStore
 from agent_rooms.tui.state import ViewState
+from agent_rooms.tui.suggest import suggest
 from agent_rooms.tui.widgets.composer import CommandInput
 from agent_rooms.tui.widgets.help import HelpScreen
+from agent_rooms.tui.widgets.palette import SuggestionPopup
 from agent_rooms.tui.widgets.panels import ConnectionBadge, MembersPanel, RoomHeader, RoomList, StatusLine
 from agent_rooms.tui.widgets.thread import ThreadPane
 
 NORMAL, LOGIN, CONFIRM = "normal", "login", "confirm"
-HINT = "Enter send · ↑↓ history · Tab complete · PgUp/PgDn scroll · /help"
+HINT = "Enter send · / commands · ↑↓ history · PgUp/PgDn scroll · /help"
 NEED_LOGIN = "Token missing or rejected. Type /login to sign in."
 NOT_SIGNED_IN = "Not signed in. Type /login."
 NO_ROOM = "No room selected. Type /room <slug> to open one or /new <slug> <topic> to create one."
@@ -97,6 +97,7 @@ class AgentRoomsApp(App[None]):
         with Horizontal(id="composer"):
             yield Static("\u203a", id="prompt")
             yield CommandInput(id="input")
+        yield SuggestionPopup(id="palette")
 
     @property
     def status_text(self) -> str:
@@ -115,7 +116,7 @@ class AgentRoomsApp(App[None]):
         return self.query_one(ThreadPane)
 
     async def on_mount(self) -> None:
-        self._input.completer = self._complete
+        self._input.palette = self.query_one(SuggestionPopup)
         self._input.focus()
         self._enter_mode(NORMAL)
         self._apply_width(self.size.width)
@@ -138,12 +139,25 @@ class AgentRoomsApp(App[None]):
         self.screen.set_class(width < NARROW_WIDTH, "-narrow")
         self.screen.set_class(width < TINY_WIDTH, "-tiny")
 
-    def _complete(self, line: str) -> Completion | None:
-        if self.mode != NORMAL:
-            return None
-        summary = self.state.summary
-        members = [member.name for member in summary.members] if summary else []
-        return complete(line, self.state.slugs, members)
+    def _refresh_palette(self) -> None:
+        field, popup = self._input, self.query_one(SuggestionPopup)
+        if field.value != field.quiet_value:
+            field.quiet_value = None
+        items = []
+        if self.mode == NORMAL and field.quiet_value is None:
+            summary = self.state.summary
+            items = suggest(field.value, self.state.rooms, summary.members if summary else ())
+        if items:
+            popup.show(items)
+        else:
+            popup.hide()
+
+    def on_input_changed(self, event: CommandInput.Changed) -> None:
+        if event.input is self._input:
+            self._refresh_palette()
+
+    def on_command_input_refresh(self) -> None:
+        self._refresh_palette()
 
     # status line and connection
 
@@ -163,19 +177,18 @@ class AgentRoomsApp(App[None]):
         state = "signed-out" if not self.api.has_token else ("offline" if self.state.offline else "connected")
         self.query_one(ConnectionBadge).show(state)
 
-    def on_command_input_hint(self, message: CommandInput.Hint) -> None:
-        self._info(message.text)
-
     # rendering
 
     def _render_rooms(self) -> None:
         self.query_one(RoomList).show(self.state.rooms, self.state.selected)
+        self._refresh_palette()
 
     def _render_room(self) -> None:
         self.query_one(RoomHeader).show(
             self.state.summary, selected=self.state.selected, missing=self.state.room_missing
         )
         self.query_one(MembersPanel).show(self.state.summary)
+        self._refresh_palette()
 
     def _render_all(self) -> None:
         self._render_rooms()
@@ -265,6 +278,7 @@ class AgentRoomsApp(App[None]):
             LOGIN: "Paste the human token",
             CONFIRM: placeholder,
         }[mode]
+        self._refresh_palette()
 
     def on_input_submitted(self, event: CommandInput.Submitted) -> None:
         value = event.value
@@ -284,7 +298,11 @@ class AgentRoomsApp(App[None]):
             await work
 
     def action_cancel(self) -> None:
-        if self.mode != NORMAL:
+        popup = self.query_one(SuggestionPopup)
+        if popup.display:
+            self._input.quiet_value = self._input.value
+            popup.hide()
+        elif self.mode != NORMAL:
             self._confirmation = None
             self._enter_mode(NORMAL)
             self._hint()
